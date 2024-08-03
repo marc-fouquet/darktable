@@ -908,6 +908,21 @@ void dt_masks_dynbuf_free(dt_masks_dynbuf_t *a)
   free(a);
 }
 
+// Dump buffer to file for debugging.
+static inline
+void dt_masks_dynbuf_debug_print(dt_masks_dynbuf_t *a)
+{
+  if(a == NULL) return;
+  FILE *f;
+  char filename[255] = { 0 };
+  sprintf(filename, "debug-%ld-%s", time(NULL), a->tag);
+  f = g_fopen(filename, "w");
+  for (size_t i = 0; i < a->pos; i += 2) {
+    fprintf(f, "%f %f\n", a->buffer[i], a->buffer[i+1]);
+  }
+  fclose(f);
+}
+
 static inline
 int dt_masks_roundup(const int num, const int mult)
 {
