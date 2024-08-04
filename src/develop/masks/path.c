@@ -392,6 +392,12 @@ static void _path_points_recurs_border_gaps(float *cmax,
   }
 }
 
+// static inline 
+float smoothstep(float p1, float p2, float t)
+{
+  return p1 + (p2 - p1) * t * t * (3.0 - 2.0 * t);
+}
+
 /** recursive function to get all points of the path AND all point of the border */
 /** the function take care to avoid big gaps between points */
 static void _path_points_recurs(float *p1,
@@ -412,14 +418,14 @@ static void _path_points_recurs(float *p1,
   if(path_min[0] == DT_INVALID_COORDINATE)
   {
     _path_border_get_XY(p1[0], p1[1], p1[2], p1[3], p2[2], p2[3], p2[0], p2[1], tmin,
-                        p1[4] + (p2[4] - p1[4]) * tmin * tmin * (3.0 - 2.0 * tmin),
+                        smoothstep(p1[4], p2[4], tmin),
                         path_min, path_min + 1,
                         border_min, border_min + 1);
   }
   if(path_max[0] == DT_INVALID_COORDINATE)
   {
     _path_border_get_XY(p1[0], p1[1], p1[2], p1[3], p2[2], p2[3], p2[0], p2[1], tmax,
-                        p1[4] + (p2[4] - p1[4]) * tmax * tmax * (3.0 - 2.0 * tmax),
+                        smoothstep(p1[4], p2[4], tmax),
                         path_max, path_max + 1,
                         border_max, border_max + 1);
   }
@@ -465,7 +471,7 @@ float dist_squared(float x1, float y1, float x2, float y2)
   return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
 }
 
-static inline 
+static inline
 int border_point_wrap_around(int min, int max, int idx)
 {
   return ((idx - min) % (max - min)) + min;
