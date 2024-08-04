@@ -2399,11 +2399,22 @@ static void _path_events_post_expose(cairo_t *cr,
 
     // we draw the path segment by segment
     for(int k = 0; k < nb; k++)
+    {
+      if (gui->point_border_selected == k)
+      {
+        // visually connect the selected border control point to the original point
+        cairo_move_to(cr, gpt->points[k * 6 + 2], gpt->points[k * 6 + 3]);
+        cairo_line_to(cr, gpt->border[k * 6],     gpt->border[k * 6 + 1]);
+        dt_masks_line_stroke(cr, TRUE, FALSE, FALSE, zoom_scale);
+      }
+
+      // draw the border control point
       dt_masks_draw_anchor(cr,
                            gui->point_border_selected == k,
                            zoom_scale,
                            gpt->border[k * 6],
                            gpt->border[k * 6 + 1]);
+    }
   }
 
   // draw a cross where the source will be created
