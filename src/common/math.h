@@ -751,6 +751,29 @@ static inline void dt_vector_sin(const dt_aligned_pixel_t arg,
     sine[c] = scaled[c] * (p[c] * (abs_scaled[c] - one[c]) + one[c]);
 }
 
+static inline
+float dist_squared_2d(float x1, float y1, float x2, float y2)
+{
+  return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
+}
+
+static inline
+float angle_2d(float x1, float y1, float x_ref, float y_ref)
+{
+  return atan2(y_ref - y1, x_ref - x1);
+}
+
+static inline
+void rotate_2d(float *x, float *y, float angle)
+{
+  float c = cos(angle);
+  float s = sin(angle);
+  float x_ = *x;
+  float y_ = *y;
+  *x = x_ * c - y_ * s;
+  *y = x_ * s + y_ * c;
+}
+
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

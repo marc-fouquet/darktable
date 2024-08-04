@@ -123,11 +123,20 @@ typedef enum dt_masks_source_pos_type_t
 /* selected Bézier control point for path*/
 typedef enum dt_masks_path_ctrl_t
 {
-  DT_MASKS_PATH_CRTL_NONE = -1,
+  DT_MASKS_PATH_CRTL_NONE = 0,
   DT_MASKS_PATH_CTRL1 = 1,
   DT_MASKS_PATH_CTRL2 = 2
 
 } dt_masks_path_ctrl_t;
+
+/* restrictions on moving Bézier control points */
+typedef enum dt_masks_path_edit_mode_t
+{
+  DT_MASKS_BEZIER_NONE = 0,             // preserve angle & scale
+  DT_MASKS_BEZIER_SINGLE = 1 << 0,      // no restriction
+  DT_MASKS_BEZIER_SYMMETRIC = 1 << 1,   // force full symmetry
+  // SINGLE && SYMMETRIC => force angle symmetry only
+} dt_masks_path_edit_mode_t;
 
 /** structure used to store 1 point for a circle */
 typedef struct dt_masks_point_circle_t
@@ -388,9 +397,12 @@ typedef struct dt_masks_form_gui_t
   gboolean gradient_toggling;
   int point_dragging;
   int feather_dragging;
-  gboolean bezier_single;  // User drags a single control point.  
   int seg_dragging;
   int point_border_dragging;
+
+  dt_masks_path_edit_mode_t bezier_mode;  // Bézier editing with shift or ctrl
+  float bezier_ctrl_angle;  // angle between ctrl1 and ctrl2
+  float bezier_ctrl_scale;  // length of ctrl2 relative to ctrl1
 
   int group_edited;
   int group_selected;

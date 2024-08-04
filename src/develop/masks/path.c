@@ -20,6 +20,7 @@
 #include "common/debug.h"
 #include "common/imagebuf.h"
 #include "common/undo.h"
+#include "common/math.h"
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/blend.h"
@@ -124,28 +125,138 @@ static void _path_border_get_XY(const float p0x,
   *yb = (*yc) - rad * dx * l;
 }
 
-void _update_bezier_ctrl_points(dt_masks_point_path_t *point, float iwidth, float iheight,
-                        float new_ctrl[2], dt_masks_path_ctrl_t ctrl_select, bool ctrl_single)
+static inline
+float get_ctrl_angle(const float x_ref, const float y_ref,
+                     const float x1, const float y1,
+                     const float x2, const float y2)
 {
-  float icorner[2] = { point->corner[0] * iwidth, point->corner[1] * iheight };
+  return angle_2d(x1 - x_ref, y1 - y_ref, x2 - x_ref, y2 - y_ref);
+}
+
+static
+void set_ctrl_angle(const float x_ref, const float y_ref,
+                    float angle, gboolean move_p2,
+                    float *x1, float *y1,
+                    float *x2, float *y2)
+{
+  if (!move_p2) // move p1
+  {
+    float length1 = sqrt((*x1 - x_ref) * (*x1 - x_ref) + (*y1 - y_ref) * (*y1 - y_ref));
+    float angle2 = atan2(*y2 - y_ref, *x2 - x_ref);
+    float angle1 = angle2 + angle;
+
+    *x1 = x_ref + length1 * cos(angle1);
+    *y1 = y_ref + length1 * sin(angle1);
+  }
+  else // move p2
+  {
+    float length2 = sqrt((*x2 - x_ref) * (*x2 - x_ref) + (*y2 - y_ref) * (*y2 - y_ref));
+    float angle1 = atan2(*y1 - y_ref, *x1 - x_ref);
+    float angle2 = angle1 - angle;
+
+    *x2 = x_ref + length2 * cos(angle2);
+    *y2 = y_ref + length2 * sin(angle2);
+  }
+}
+
+static inline
+float get_ctrl_scale(const float x_ref, const float y_ref,
+                     const float x1, const float y1,
+                     const float x2, const float y2)
+{
+  float length1 = sqrt((x1 - x_ref) * (x1 - x_ref) + (y1 - y_ref) * (y1 - y_ref));
+  float length2 = sqrt((x2 - x_ref) * (x2 - x_ref) + (y2 - y_ref) * (y2 - y_ref));
+  return length1 / length2;
+}
+
+static
+void set_ctrl_scale(const float x_ref, const float y_ref,
+                    float scale, gboolean move_p2,
+                    float *x1, float *y1,
+                    float *x2, float *y2)
+{
+  if (!move_p2) // move p1
+  {
+    float length2 = sqrt((*x2 - x_ref) * (*x2 - x_ref) + (*y2 - y_ref) * (*y2 - y_ref));
+    float angle1 = atan2(*y1 - y_ref, *x1 - x_ref);
+    float length1 = length2 * scale;
+
+    *x1 = x_ref + length1 * cos(angle1);
+    *y1 = y_ref + length1 * sin(angle1);
+  }
+  else // move p2
+  {
+    float length1 = sqrt((*x1 - x_ref) * (*x1 - x_ref) + (*y1 - y_ref) * (*y1 - y_ref));
+    float angle2 = atan2(*y2 - y_ref, *x2 - x_ref);
+    float length2 = length1 / scale;
+
+    *x2 = x_ref + length2 * cos(angle2);
+    *y2 = y_ref + length2 * sin(angle2);
+  }
+}
+
+static
+void set_ctrl_symmetric(const float x_ref, const float y_ref,
+                        gboolean move_p2,
+                        float *x1, float *y1,
+                        float *x2, float *y2)
+{
+  if (!move_p2) // move p1
+  {
+    *x1 = x_ref - (*x2 - x_ref);
+    *y1 = y_ref - (*y2 - y_ref);
+  }
+  else // move p2
+  {
+    *x2 = x_ref - (*x1 - x_ref);
+    *y2 = y_ref - (*y1 - y_ref);
+  }
+}
+
+
+
+void _update_bezier_ctrl_points(dt_masks_point_path_t *point, float new_x, float new_y,
+                                dt_masks_path_ctrl_t ctrl_select, dt_masks_path_edit_mode_t ctrl_mode,
+                                float ctrl_angle, float ctrl_scale)
+{
+
+  gboolean move_p2; // is p2 the dependend node that is moved if restrictions apply?
+
   if(ctrl_select == DT_MASKS_PATH_CTRL1)
   {
-    point->ctrl1[0] = new_ctrl[0] / iwidth;
-    point->ctrl1[1] = new_ctrl[1] / iheight;
-    if (!ctrl_single) {
-      point->ctrl2[0] = (icorner[0] - (new_ctrl[0] - icorner[0])) / iwidth;
-      point->ctrl2[1] = (icorner[1] - (new_ctrl[1] - icorner[1])) / iheight;
-    }
+    point->ctrl2[0] = new_x;
+    point->ctrl2[1] = new_y;
+    move_p2 = TRUE;
+  } else {
+    point->ctrl1[0] = new_x;
+    point->ctrl1[1] = new_y;
   }
-  else
-  {
-    assert(ctrl_select == DT_MASKS_PATH_CTRL2);
-    if (!ctrl_single) {
-      point->ctrl1[0] = (icorner[0] - (new_ctrl[0] - icorner[0])) / iwidth;
-      point->ctrl1[1] = (icorner[1] - (new_ctrl[1] - icorner[1])) / iheight;
-    }
-    point->ctrl2[0] = new_ctrl[0] / iwidth;
-    point->ctrl2[1] = new_ctrl[1] / iheight;
+
+  switch (ctrl_mode) {
+    case DT_MASKS_BEZIER_NONE:
+      set_ctrl_scale(point->corner[0], point->corner[1],
+                     ctrl_scale, move_p2,
+                     &point->ctrl1[0], &point->ctrl1[1],
+                     &point->ctrl2[0], &point->ctrl2[1]);
+      set_ctrl_angle(point->corner[0], point->corner[1],
+                     ctrl_angle, move_p2,
+                     &point->ctrl1[0], &point->ctrl1[1],
+                     &point->ctrl2[0], &point->ctrl2[1]);
+      break;
+    case DT_MASKS_BEZIER_SINGLE:
+      break;
+    case DT_MASKS_BEZIER_SYMMETRIC:
+      set_ctrl_symmetric(point->corner[0], point->corner[1],
+                         move_p2,
+                         &point->ctrl1[0], &point->ctrl1[1],
+                         &point->ctrl2[0], &point->ctrl2[1]);
+      break;
+    default:
+      set_ctrl_angle(point->corner[0], point->corner[1],
+                     ctrl_angle, move_p2,
+                     &point->ctrl1[0], &point->ctrl1[1],
+                     &point->ctrl2[0], &point->ctrl2[1]);
+
   }
 }
 
@@ -307,22 +418,22 @@ static int _path_fill_gaps(const int lastx,
   return 1;
 }
 
-void _debug_print_border(const int start, const int end, float *border)
-{
-  if(debug_klick % 2 == 1)
-  {
-    FILE *f;
-    char filename[255] = { 0 };
-    sprintf(filename, "debug-%ld-border-find_self_intersection", time(NULL));
-    f = g_fopen(filename, "w");
+// void _debug_print_border(const int start, const int end, float *border)
+// {
+//   if(debug_klick % 2 == 1)
+//   {
+//     FILE *f;
+//     char filename[255] = { 0 };
+//     sprintf(filename, "debug-%ld-border-find_self_intersection", time(NULL));
+//     f = g_fopen(filename, "w");
 
-    for(int i = start; i < end; i += 2)
-    {
-      fprintf(f, "%f %f\n", border[i * 2], border[i * 2 + 1]);
-    }
-    fclose(f);
-  }
-}
+//     for(int i = start; i < end; i += 2)
+//     {
+//       fprintf(f, "%f %f\n", border[i * 2], border[i * 2 + 1]);
+//     }
+//     fclose(f);
+//   }
+// }
 
 /** fill the gap between 2 points with an arc of circle */
 /** this function is here because we can have gap in border, esp. if
@@ -336,8 +447,10 @@ static void _path_points_recurs_border_gaps(float *cmax,
                                             const gboolean clockwise)
 {
   // we want to find the start and end angles
-  double a1 = atan2f(bmin[1] - cmax[1], bmin[0] - cmax[0]);
-  double a2 = atan2f(bmax[1] - cmax[1], bmax[0] - cmax[0]);
+  // double a1 = atan2f(bmin[1] - cmax[1], bmin[0] - cmax[0]);
+  // double a2 = atan2f(bmax[1] - cmax[1], bmax[0] - cmax[0]);
+  double a1 = angle_2d(cmax[0], cmax[1], bmin[0], bmin[1]);
+  double a2 = angle_2d(cmax[0], cmax[1], bmax[0], bmax[1]);
   if(a1 == a2) return;
 
   // we have to be sure that we turn in the correct direction
@@ -465,11 +578,7 @@ static void _path_points_recurs(float *p1,
                       border_max, rpath, rborder, dpoints, dborder, withborder);
 }
 
-static inline
-float dist_squared(float x1, float y1, float x2, float y2)
-{
-  return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
-}
+
 
 static inline
 int border_point_wrap_around(int min, int max, int idx)
@@ -486,7 +595,7 @@ int find_closer_point(float *border,
                       int idx_source, int idx_target)
 {
 
-  float min_dist = dist_squared(border[idx_source * 2], border[idx_source * 2 + 1],
+  float min_dist = dist_squared_2d(border[idx_source * 2], border[idx_source * 2 + 1],
                                 border[idx_target * 2], border[idx_target * 2 + 1]);
   int min_idx = idx_target;
 
@@ -495,7 +604,7 @@ int find_closer_point(float *border,
 
 
   for (int i = 0; i < 2; i++) {
-    float dist = dist_squared(border[neighbors[i] * 2], border[neighbors[i] * 2 + 1],
+    float dist = dist_squared_2d(border[neighbors[i] * 2], border[neighbors[i] * 2 + 1],
                              border[idx_source * 2], border[idx_source * 2 + 1]);
     if (dist < min_dist) {
       min_dist = dist;
@@ -517,7 +626,7 @@ static void _optimize_intersection_points(float *border,
 
   printf("_optimize_intersection_points: %d %d %f\n",
           *shortest_idx1, *shortest_idx2,
-          dist_squared(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
+          dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
         );
 
   // TODO: This may fail because of the wrap-around
@@ -542,7 +651,7 @@ static void _optimize_intersection_points(float *border,
 
   printf("optimized: %d %d %d %f\n",
           *shortest_idx1, *shortest_idx2, iter,
-          dist_squared(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
+          dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
         );
 }
 
@@ -651,7 +760,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
       if(yy > ymin) v[2] = binter[idx - wb];
 
       int k_max = 3;
-      if (debug_klick % 2 == 1) k_max = 3;
+      // if (debug_klick % 2 == 1) k_max = 3;
       for(int k = 0; k < k_max; k++)
       {
         if(v[k] > 0)
@@ -986,10 +1095,8 @@ static int _path_get_pts_border(dt_develop_t *dev,
   int inter_count = 0;
   if(border)
   {
-    if (debug_klick % 2 == 1)
-    {
-      inter_count = _path_find_self_intersection(intersections, nb, *border, *border_count);
-    }
+
+    inter_count = _path_find_self_intersection(intersections, nb, *border, *border_count);
 
     dt_print(DT_DEBUG_MASKS | DT_DEBUG_PERF,
              "[masks %s] path_points self-intersect took %0.04f sec\n", form->name,
@@ -1685,7 +1792,22 @@ static int _path_events_button_pressed(struct dt_iop_module_t *module,
     else if(gui->feather_selected >= 0)  // Bézier control point
     {
       gui->feather_dragging = gui->feather_selected;
-      gui->bezier_single = dt_modifier_is(state, GDK_SHIFT_MASK);
+
+      gui->bezier_mode = DT_MASKS_BEZIER_NONE;
+      if (dt_modifier_is(state, GDK_SHIFT_MASK))
+        gui->bezier_mode |= DT_MASKS_BEZIER_SINGLE;
+      if (dt_modifier_is(state, GDK_CONTROL_MASK))
+        gui->bezier_mode |= DT_MASKS_BEZIER_SYMMETRIC;
+
+      dt_masks_point_path_t *point
+          = (dt_masks_point_path_t *)g_list_nth_data(form->points, gui->feather_selected);
+      gui->bezier_ctrl_angle = get_ctrl_angle(point->corner[0], point->corner[1],
+                                             point->ctrl1[0], point->ctrl1[1],
+                                             point->ctrl2[0], point->ctrl2[1]);
+      gui->bezier_ctrl_scale = get_ctrl_scale(point->corner[0], point->corner[1],
+                                             point->ctrl1[0], point->ctrl1[1],
+                                             point->ctrl2[0], point->ctrl2[1]);
+
       dt_control_queue_redraw_center();
       return 1;
     }
@@ -1871,7 +1993,8 @@ static int _path_events_button_released(struct dt_iop_module_t *module,
     (dt_masks_form_gui_points_t *)g_list_nth_data(gui->points, index);
   if(!gpt) return 0;
 
-  float wd, ht, iwidth, iheight;
+  float wd, ht; // Backbuffer width and height
+  float iwidth, iheight; // Image width and height
   dt_masks_get_image_size(&wd, &ht, &iwidth, &iheight);
 
   if(gui->form_dragging)
@@ -1970,8 +2093,10 @@ static int _path_events_button_released(struct dt_iop_module_t *module,
     float pts[2] = { pzx * wd, pzy * ht };
     dt_dev_distort_backtransform(darktable.develop, pts, 1);
 
-    _update_bezier_ctrl_points(point, iwidth, iheight, pts, gui->bezier_ctrl, gui->bezier_single);
-    gui->bezier_single = FALSE;
+    _update_bezier_ctrl_points(point, pts[0] / iwidth, pts[1] / iheight,
+                               gui->bezier_ctrl, gui->bezier_mode,
+                               gui->bezier_ctrl_angle, gui->bezier_ctrl_scale);
+    gui->bezier_mode = DT_MASKS_BEZIER_NONE;
     point->state = DT_MASKS_POINT_STATE_USER;
 
     _path_init_ctrl_points(form);
@@ -2120,7 +2245,9 @@ static int _path_events_mouse_moved(struct dt_iop_module_t *module,
     dt_masks_point_path_t *point
         = (dt_masks_point_path_t *)g_list_nth_data(form->points, gui->feather_dragging);
 
-    _update_bezier_ctrl_points(point, iwidth, iheight, pts, gui->bezier_ctrl, gui->bezier_single);
+    _update_bezier_ctrl_points(point, pts[0] / iwidth, pts[1] / iheight,
+                               gui->bezier_ctrl, gui->bezier_mode,
+                               gui->bezier_ctrl_angle, gui->bezier_ctrl_scale);
     point->state = DT_MASKS_POINT_STATE_USER;
 
     _path_init_ctrl_points(form);
