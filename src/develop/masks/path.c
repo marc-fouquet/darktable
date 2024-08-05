@@ -130,7 +130,7 @@ float get_ctrl_angle(const float x_ref, const float y_ref,
                      const float x1, const float y1,
                      const float x2, const float y2)
 {
-  return angle_2d(x1 - x_ref, y1 - y_ref, x2 - x_ref, y2 - y_ref);
+  return angle_2d(x2, y2, x_ref, y_ref) - angle_2d(x1, y1, x_ref, y_ref);
 }
 
 static
@@ -143,7 +143,7 @@ void set_ctrl_angle(const float x_ref, const float y_ref,
   {
     float length1 = sqrt((*x1 - x_ref) * (*x1 - x_ref) + (*y1 - y_ref) * (*y1 - y_ref));
     float angle2 = atan2(*y2 - y_ref, *x2 - x_ref);
-    float angle1 = angle2 + angle;
+    float angle1 = angle2 - angle;
 
     *x1 = x_ref + length1 * cos(angle1);
     *y1 = y_ref + length1 * sin(angle1);
@@ -152,7 +152,7 @@ void set_ctrl_angle(const float x_ref, const float y_ref,
   {
     float length2 = sqrt((*x2 - x_ref) * (*x2 - x_ref) + (*y2 - y_ref) * (*y2 - y_ref));
     float angle1 = atan2(*y1 - y_ref, *x1 - x_ref);
-    float angle2 = angle1 - angle;
+    float angle2 = angle1 + angle;
 
     *x2 = x_ref + length2 * cos(angle2);
     *y2 = y_ref + length2 * sin(angle2);
@@ -219,17 +219,18 @@ void _update_bezier_ctrl_points(dt_masks_point_path_t *point, float new_x, float
                                 dt_masks_path_ctrl_t ctrl_select, dt_masks_path_edit_mode_t ctrl_mode,
                                 float ctrl_angle, float ctrl_scale)
 {
-
   gboolean move_p2; // is p2 the dependend node that is moved if restrictions apply?
 
   if(ctrl_select == DT_MASKS_PATH_CTRL1)
   {
-    point->ctrl2[0] = new_x;
-    point->ctrl2[1] = new_y;
-    move_p2 = TRUE;
-  } else {
     point->ctrl1[0] = new_x;
     point->ctrl1[1] = new_y;
+    move_p2 = TRUE;
+  } else {
+    assert(ctrl_select == DT_MASKS_PATH_CTRL2);
+    point->ctrl2[0] = new_x;
+    point->ctrl2[1] = new_y;
+    move_p2 = FALSE;
   }
 
   switch (ctrl_mode) {
@@ -251,12 +252,14 @@ void _update_bezier_ctrl_points(dt_masks_point_path_t *point, float new_x, float
                          &point->ctrl1[0], &point->ctrl1[1],
                          &point->ctrl2[0], &point->ctrl2[1]);
       break;
-    default:
+    case DT_MASKS_BEZIER_SING_SYMM:
       set_ctrl_angle(point->corner[0], point->corner[1],
                      ctrl_angle, move_p2,
                      &point->ctrl1[0], &point->ctrl1[1],
                      &point->ctrl2[0], &point->ctrl2[1]);
-
+      break;
+    default:
+      assert(FALSE);
   }
 }
 
@@ -624,10 +627,10 @@ static void _optimize_intersection_points(float *border,
   const int MAX_ITER = 20;
   int iter = 0;
 
-  printf("_optimize_intersection_points: %d %d %f\n",
-          *shortest_idx1, *shortest_idx2,
-          dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
-        );
+  // printf("_optimize_intersection_points: %d %d %f\n",
+  //         *shortest_idx1, *shortest_idx2,
+  //         dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
+  //       );
 
   // TODO: This may fail because of the wrap-around
   // assert(*shortest_idx1 < *shortest_idx2);
@@ -649,10 +652,10 @@ static void _optimize_intersection_points(float *border,
     iter++;
   }
 
-  printf("optimized: %d %d %d %f\n",
-          *shortest_idx1, *shortest_idx2, iter,
-          dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
-        );
+  // printf("optimized: %d %d %d %f\n",
+  //         *shortest_idx1, *shortest_idx2, iter,
+  //         dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
+  //       );
 }
 
 /** find all self intersections in a path */
@@ -829,7 +832,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
                       // The new self-intersection fully contains an old one.
                       // Update the old intersection.
                       _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
-                      printf("Update old intersection old %d %d, new %d %d, new optimized %d %d\n", prev_start, prev_end, v[k], i, curr_start, curr_end);
+                      // printf("Update old intersection old %d %d, new %d %d, new optimized %d %d\n", prev_start, prev_end, v[k], i, curr_start, curr_end);
 
                       dt_masks_dynbuf_set_absolute(inter, n * 2, curr_start);
                       dt_masks_dynbuf_set_absolute(inter, n * 2 + 1, curr_end);
@@ -844,7 +847,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
                 // We have a new self-intersection that does not overlap the last one.
                 _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
 
-                printf("Add new intersection #%d new %d %d, new optimized %d %d\n", inter_count+1, v[k], i, curr_start, curr_end);
+                // printf("Add new intersection #%d new %d %d, new optimized %d %d\n", inter_count+1, v[k], i, curr_start, curr_end);
 
                 dt_masks_dynbuf_add_2(inter, curr_start, curr_end);
                 inter_count++;
@@ -857,7 +860,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
               int curr_end = i;
               _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
 
-              printf("Add FIRST intersection new %d %d, new optimized %d %d\n", v[k], i, curr_start, curr_end);
+              // printf("Add FIRST intersection new %d %d, new optimized %d %d\n", v[k], i, curr_start, curr_end);
 
               dt_masks_dynbuf_add_2(inter, curr_start, curr_end);
               inter_count++;
@@ -1793,11 +1796,15 @@ static int _path_events_button_pressed(struct dt_iop_module_t *module,
     {
       gui->feather_dragging = gui->feather_selected;
 
+
+
       gui->bezier_mode = DT_MASKS_BEZIER_NONE;
       if (dt_modifier_is(state, GDK_SHIFT_MASK))
-        gui->bezier_mode |= DT_MASKS_BEZIER_SINGLE;
-      if (dt_modifier_is(state, GDK_CONTROL_MASK))
-        gui->bezier_mode |= DT_MASKS_BEZIER_SYMMETRIC;
+        gui->bezier_mode = DT_MASKS_BEZIER_SINGLE;
+      else if (dt_modifier_is(state, GDK_CONTROL_MASK))
+        gui->bezier_mode = DT_MASKS_BEZIER_SYMMETRIC;
+      else if (dt_modifier_is(state, GDK_CONTROL_MASK | GDK_SHIFT_MASK))
+        gui->bezier_mode = DT_MASKS_BEZIER_SING_SYMM;
 
       dt_masks_point_path_t *point
           = (dt_masks_point_path_t *)g_list_nth_data(form->points, gui->feather_selected);
@@ -3623,8 +3630,8 @@ static void _path_set_hint_message(const dt_masks_form_gui_t *const gui,
               msgbuf_len);
   else if(gui->feather_selected >= 0)
     g_strlcat(msgbuf,
-              _("<b>node curvature</b>: drag, <b>move single handle</b>: shift+drag\n"
-                "<b>reset curvature</b>: right-click"),
+              _("<b>node curvature</b>: drag, <b>force symmetry</b>: ctrl+drag,\n"
+                "<b>move single handle</b>: shift+drag, <b>reset curvature</b>: right-click"),
               msgbuf_len);
   else if(gui->seg_selected >= 0)
     g_strlcat(msgbuf,

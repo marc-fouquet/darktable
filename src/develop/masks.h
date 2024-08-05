@@ -132,10 +132,10 @@ typedef enum dt_masks_path_ctrl_t
 /* restrictions on moving Bézier control points */
 typedef enum dt_masks_path_edit_mode_t
 {
-  DT_MASKS_BEZIER_NONE = 0,             // preserve angle & scale
-  DT_MASKS_BEZIER_SINGLE = 1 << 0,      // no restriction
-  DT_MASKS_BEZIER_SYMMETRIC = 1 << 1,   // force full symmetry
-  // SINGLE && SYMMETRIC => force angle symmetry only
+  DT_MASKS_BEZIER_NONE = 0,        // preserve angle & scale
+  DT_MASKS_BEZIER_SINGLE = 1,      // no restriction
+  DT_MASKS_BEZIER_SYMMETRIC = 2,   // force full symmetry
+  DT_MASKS_BEZIER_SING_SYMM = 3    // SINGLE && SYMMETRIC => force angle symmetry only
 } dt_masks_path_edit_mode_t;
 
 /** structure used to store 1 point for a circle */
