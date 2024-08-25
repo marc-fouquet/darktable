@@ -584,7 +584,7 @@ static void _path_points_recurs(float *p1,
 
 
 static inline
-int border_point_wrap_around(int min, int max, int idx)
+int border_point_wrap_around(int const min, const int max, const int idx)
 {
   return ((idx - min) % (max - min)) + min;
 }
@@ -599,7 +599,7 @@ int find_closer_point(float *border,
 {
 
   float min_dist = dist_squared_2d(border[idx_source * 2], border[idx_source * 2 + 1],
-                                border[idx_target * 2], border[idx_target * 2 + 1]);
+                                   border[idx_target * 2], border[idx_target * 2 + 1]);
   int min_idx = idx_target;
 
   int neighbors[] = { border_point_wrap_around(border_first, border_count, idx_target - 1),
@@ -608,7 +608,7 @@ int find_closer_point(float *border,
 
   for (int i = 0; i < 2; i++) {
     float dist = dist_squared_2d(border[neighbors[i] * 2], border[neighbors[i] * 2 + 1],
-                             border[idx_source * 2], border[idx_source * 2 + 1]);
+                                 border[idx_source * 2], border[idx_source * 2 + 1]);
     if (dist < min_dist) {
       min_dist = dist;
       min_idx = neighbors[i];
@@ -620,42 +620,43 @@ int find_closer_point(float *border,
 
 
 
-static void _optimize_intersection_points(float *border,
-                                         const int border_first, const int border_count,
-                                         int *shortest_idx1, int *shortest_idx2)
+static int _optimize_intersection_points(float *border,
+                                         const int border_first, const int border_wrap, const int border_count,
+                                         int old_idx1, int idx2)
 {
+  if (debug_klick % 2 == 1) {
+    printf("Skipping _optimize_intersection_points\n");
+    return old_idx1;
+  }
+
   const int MAX_ITER = 20;
   int iter = 0;
+  int new_idx1;
 
-  // printf("_optimize_intersection_points: %d %d %f\n",
-  //         *shortest_idx1, *shortest_idx2,
-  //         dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
-  //       );
-
-  // TODO: This may fail because of the wrap-around
-  // assert(*shortest_idx1 < *shortest_idx2);
+  int nb_border_points = border_count - border_first;
 
   // Don't optimize segments that are very short.
-  // Also don't optimize to length 0.
-  if (*shortest_idx1 + MAX_ITER + 1 > *shortest_idx2) return;
+  // Also don't optimize to or below length 0.
+  int shortest_idx1_ordered = old_idx1 >= border_wrap ? old_idx1 : old_idx1 + nb_border_points;
+  int shortest_idx2_ordered = idx2 >= border_wrap ? idx2 : idx2 + nb_border_points;
+
+  if (shortest_idx1_ordered + MAX_ITER + 1 > shortest_idx2_ordered) return old_idx1;
 
   while (iter < MAX_ITER) {
 
+    new_idx1 = find_closer_point(border, border_first, border_count, idx2, old_idx1);
 
-    int new_idx1 = find_closer_point(border, border_first, border_count, *shortest_idx2, *shortest_idx1);
-    if (new_idx1 != *shortest_idx1) {
-      *shortest_idx1 = new_idx1;
+    if (new_idx1 == old_idx1) break; // optimization found no closer point
+
+    // new_idx1 must be on the same side of border_wrap
+    if ((old_idx1 >= border_wrap) != (new_idx1 >= border_wrap)) {
+      printf("_optimize_intersection_points: old_idx1 (%d) and new_idx1 (%d) must be on the same side of border_wrap (%d).\n", old_idx1, new_idx1, border_wrap);
+      return old_idx1;
     }
-    else{  // optimization found no closer point
-      break;
-    };
+
     iter++;
   }
-
-  // printf("optimized: %d %d %d %f\n",
-  //         *shortest_idx1, *shortest_idx2, iter,
-  //         dist_squared_2d(border[*shortest_idx1 * 2], border[*shortest_idx1 * 2 + 1], border[*shortest_idx2 * 2], border[*shortest_idx2 * 2 + 1])
-  //       );
+  return new_idx1;
 }
 
 /** find all self intersections in a path */
@@ -673,8 +674,8 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
   int posextr[4] = { -1 }; // xmin,xmax,ymin,ymax
 
   // _debug_print_border(_nb_ctrl_point(nb_corners), border_count, border);
-
-  for(int i = _nb_ctrl_point(nb_corners); i < border_count; i++)
+  int border_first = _nb_ctrl_point(nb_corners);  // the control points are stored before the border points
+  for(int i = border_first; i < border_count; i++)
   {
     if((border[i * 2] == DT_INVALID_COORDINATE) || (border[i * 2 + 1] == DT_INVALID_COORDINATE))
     {
@@ -728,12 +729,13 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
   // from border shape extrema (here x_max)
   int lastx = border[(posextr[1] - 1) * 2];
   int lasty = border[(posextr[1] - 1) * 2 + 1];
-  int border_first = _nb_ctrl_point(nb_corners);  // the control points are stored before the border points
+
   int nb_border_points = border_count - border_first;
 
   for(int ii = border_first; ii < border_count; ii++)
   {
     // we want to loop from one border extremity
+    // i: [posextr[1]...border_count) ... [border_first...posextr[1])
     int i = ii - border_first + posextr[1];
     if(i >= border_count) i = i - nb_border_points;
 
@@ -794,15 +796,24 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
             if(inter_count > 0)
             {
 
+              // We want to check, if the new self-intersection partially
+              // or fully overlaps with any previous one. However there
+              // is the slight problem that the indexes wrap around and
+              // this could happen in or between our self-intersecting
+              // regions.
+
               int curr_start = v[k];
               int curr_end = i;
               int curr_start_ordered = curr_start >= posextr[1] ? curr_start : curr_start + nb_border_points;
               int curr_end_ordered = curr_end >= posextr[1] ? curr_end : curr_end + nb_border_points;
 
+              assert(curr_start_ordered <= curr_end_ordered);
+
               int prev_start;
               int prev_end;
               int prev_start_ordered;
               int prev_end_ordered;
+
 
               // Loop over all previously found self-intersections
               int n;
@@ -815,8 +826,6 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
                 prev_end_ordered = prev_end >= posextr[1] ? prev_end : prev_end + nb_border_points;
 
                 assert(prev_start_ordered <= prev_end_ordered);
-                assert(curr_start_ordered <= curr_end_ordered);
-                assert(prev_end_ordered <= curr_end_ordered);
 
                 if (prev_start_ordered <= curr_start_ordered
                     && curr_start_ordered <= prev_end_ordered)
@@ -831,7 +840,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
                 {
                       // The new self-intersection fully contains an old one.
                       // Update the old intersection.
-                      _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
+                      curr_start = _optimize_intersection_points(border, border_first, posextr[1], border_count, curr_start, curr_end);
                       // printf("Update old intersection old %d %d, new %d %d, new optimized %d %d\n", prev_start, prev_end, v[k], i, curr_start, curr_end);
 
                       dt_masks_dynbuf_set_absolute(inter, n * 2, curr_start);
@@ -841,11 +850,11 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
 
               }
 
-              if (n == inter_count      // for loop exited with break
+              if (n == inter_count      // for loop did not exit with break
                   && prev_end_ordered < curr_start_ordered)
               {
                 // We have a new self-intersection that does not overlap the last one.
-                _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
+                curr_start = _optimize_intersection_points(border, border_first, posextr[1], border_count, curr_start, curr_end);
 
                 // printf("Add new intersection #%d new %d %d, new optimized %d %d\n", inter_count+1, v[k], i, curr_start, curr_end);
 
@@ -858,7 +867,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
               // we find a new self-intersection portion
               int curr_start = v[k];
               int curr_end = i;
-              _optimize_intersection_points(border, border_first, border_count, &curr_start, &curr_end);
+              curr_start = _optimize_intersection_points(border, border_first, posextr[1], border_count, curr_start, curr_end);
 
               // printf("Add FIRST intersection new %d %d, new optimized %d %d\n", v[k], i, curr_start, curr_end);
 
