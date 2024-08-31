@@ -20,7 +20,7 @@
 #include "common/debug.h"
 #include "common/imagebuf.h"
 #include "common/undo.h"
-#include "common/math.h"
+// #include "common/math.h"
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/blend.h"
@@ -123,6 +123,12 @@ static void _path_border_get_XY(const float p0x,
   const double l = 1.0 / sqrt(dx * dx + dy * dy);
   *xb = (*xc) + rad * dy * l;
   *yb = (*yc) - rad * dx * l;
+}
+
+static inline
+float angle_2d(float x1, float y1, float x_ref, float y_ref)
+{
+  return atan2(y_ref - y1, x_ref - x1);
 }
 
 static inline
@@ -441,12 +447,13 @@ static int _path_fill_gaps(const int lastx,
 /** fill the gap between 2 points with an arc of circle */
 /** this function is here because we can have gap in border, esp. if
  * the corner is very sharp */
-static void _path_points_recurs_border_gaps(float *cmax,
+static void _path_points_fill_border_gaps(float *cmax,
                                             float *bmin,
                                             float *bmin2,
                                             float *bmax,
                                             dt_masks_dynbuf_t *dpoints,
                                             dt_masks_dynbuf_t *dborder,
+                                            dt_masks_intbuf_t *fill_seg_indexes,
                                             const gboolean clockwise)
 {
   // we want to find the start and end angles
@@ -485,6 +492,11 @@ static void _path_points_recurs_border_gaps(float *cmax,
   const float incrr = (r2 - r1) / l;
   float rr = r1 + incrr;
   float aa = a1 + incra;
+
+  // remember the indexes of the points we added
+  int start_pt_index = dt_masks_dynbuf_position(dpoints)/2;
+  dt_masks_intbuf_add2(fill_seg_indexes, start_pt_index, start_pt_index + 2*(l-1));
+
   // allocate entries in the dynbufs
   float *dpoints_ptr = dt_masks_dynbuf_reserve_n(dpoints, 2*(l-1));
   float *dborder_ptr = dborder ? dt_masks_dynbuf_reserve_n(dborder, 2*(l-1)) : NULL;
@@ -508,7 +520,7 @@ static void _path_points_recurs_border_gaps(float *cmax,
   }
 }
 
-// static inline 
+static inline
 float smoothstep(float p1, float p2, float t)
 {
   return p1 + (p2 - p1) * t * t * (3.0 - 2.0 * t);
@@ -582,6 +594,11 @@ static void _path_points_recurs(float *p1,
 }
 
 
+static inline
+float dist_squared_2d(float x1, float y1, float x2, float y2)
+{
+  return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
+}
 
 static inline
 int border_point_wrap_around(int const min, const int max, const int idx)
@@ -593,7 +610,7 @@ int border_point_wrap_around(int const min, const int max, const int idx)
    Check if one of the neighbors of idx_target is closer to idx_source.
 */
 static inline
-int find_closer_point(float *border,
+int _find_closer_point(float *border,
                       const int border_first, const int border_count,
                       int idx_fixed, int idx_optimize)
 {
@@ -645,7 +662,7 @@ static void _optimize_intersection_points(float *border,
 
   while (iter < MAX_ITER) {
 
-    new_idx1 = find_closer_point(border, border_first, border_count, *idx2, *idx1);
+    new_idx1 = _find_closer_point(border, border_first, border_count, *idx2, *idx1);
 
     if ((*idx1 >= border_wrap) != (new_idx1 >= border_wrap)) {
       printf("_optimize_intersection_points: old_idx1 (%d) and new_idx1 (%d) must be on the same side of border_wrap (%d).\n", *idx1, new_idx1, border_wrap);
@@ -658,7 +675,7 @@ static void _optimize_intersection_points(float *border,
       idx1_updated = FALSE;
     }
 
-    new_idx2 = find_closer_point(border, border_first, border_count, *idx1, *idx2);
+    new_idx2 = _find_closer_point(border, border_first, border_count, *idx1, *idx2);
 
     if ((*idx2 >= border_wrap) != (new_idx2 >= border_wrap)) {
       printf("_optimize_intersection_points: old_idx2 (%d) and new_idx2 (%d) must be on the same side of border_wrap (%d).\n", *idx2, new_idx2, border_wrap);
@@ -669,7 +686,6 @@ static void _optimize_intersection_points(float *border,
     } else {
       // Optimization tried both sides and did not find an improvement.
       if (!idx1_updated) {
-        printf("_optimize_intersection_points: break at iter = %d\n", iter);
         break;
       }
     };
@@ -678,7 +694,7 @@ static void _optimize_intersection_points(float *border,
   }
 
   float debug_dist_new = sqrt(dist_squared_2d(border[*idx1 * 2], border[*idx1 * 2 + 1], border[*idx2 * 2], border[*idx2 * 2 + 1]));
-  printf("_optimize_intersection_points: debug_dist_old = %f, debug_dist_new = %f\n", debug_dist_old, debug_dist_new);
+  printf("_optimize_intersection_points: debug_dist_old = %f, debug_dist_new = %f, iter = %d\n", debug_dist_old, debug_dist_new, iter);
 }
 
 /** find all self intersections in a path */
@@ -826,6 +842,9 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
 
               int curr_start = v[k];
               int curr_end = i;
+
+              printf("Candidate intersection: [%d - %d]\n", curr_start, curr_end);
+
               int curr_start_ordered = curr_start >= posextr[1] ? curr_start : curr_start + nb_border_points;
               int curr_end_ordered = curr_end >= posextr[1] ? curr_end : curr_end + nb_border_points;
 
@@ -836,10 +855,30 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
               int prev_start_ordered;
               int prev_end_ordered;
 
+              // TODO:
+              // 1. Preserve the order of self-intersections
+              // 2. An overlapping self-intersection may overlap multiple
+              //    previous self-intersections.
+              // 3. Do we need to do something with the start/end point?
+              //    This is by definition the rightmost point, so it
+              //    is not part of a self-intersection.
+
+              // There seem to be problem-cases, where a circle is not cut,
+              // even though it does not interact with a previous intersection.
+              // It happens when the feathering border is too far away at some
+              // point.
+              // Sometimes the intersection count is even 0.
+              // This happens, when a part of the featering border is too far down,
+              // so it includes the y maximum.
+              // There may be conflicting conditions here. Two parts might self-
+              // intersect, where one contains the y maximum and the other contains
+              // the x minimum - so neither is cut and the (double) self-intersection
+              // remains.
 
               // Loop over all previously found self-intersections
               int n;
-              for (n = 0; n < inter_count; n++)
+              int old_inter_count = inter_count; // inter_count might be modified in the loop
+              for (n = 0; n < old_inter_count; n++)
               {
                 prev_start = dt_masks_dynbuf_get_absolute(inter, n * 2);
                 prev_end = dt_masks_dynbuf_get_absolute(inter, n * 2 + 1);
@@ -855,40 +894,57 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
                       // If the new self-intersection starts in a previous self-intersection,
                       // there is nothing to do (the start is on a segment that does not exist,
                       // so it makes no sense to cut).
+                      printf("Intersection rejected, as it starts in [%d - %d]\n", prev_start, prev_end);
                       break;
                 }
-                if (curr_start_ordered <= prev_start_ordered
-                    && prev_end_ordered <= curr_end_ordered)
+                if (curr_start_ordered < prev_start_ordered
+                    && prev_end_ordered < curr_end_ordered)
                 {
-                      // The new self-intersection fully contains an old one.
-                      // Update the old intersection.
-                      int opt_start = curr_start;
-                      int opt_end = curr_end;
-                      _optimize_intersection_points(border, border_first, posextr[1], border_count, &opt_start, &opt_end);
+                  // The new self-intersection fully contains an old one.
+                  printf("Contains old intersection [%d - %d]\n", prev_start, prev_end);
 
-                      // Check if or condition still holds for the optimized points,
-                      // otherwise use the unoptimized ones
-                      int opt_start_ordered = opt_start >= posextr[1] ? opt_start : opt_start + nb_border_points;
-                      int opt_end_ordered = opt_end >= posextr[1] ? opt_end : opt_end + nb_border_points;
+                  // Update the old intersection.
+                  int opt_start = curr_start;
+                  int opt_end = curr_end;
+                  _optimize_intersection_points(border, border_first, posextr[1], border_count, &opt_start, &opt_end);
 
-                      if (opt_start_ordered <= prev_start_ordered
-                          && prev_end_ordered <= opt_end_ordered)
-                      {
+                  // Check if or condition still holds for the optimized points,
+                  // otherwise use the unoptimized ones
+                  int opt_start_ordered = opt_start >= posextr[1] ? opt_start : opt_start + nb_border_points;
+                  int opt_end_ordered = opt_end >= posextr[1] ? opt_end : opt_end + nb_border_points;
 
-                        dt_masks_dynbuf_set_absolute(inter, n * 2, opt_start);
-                        dt_masks_dynbuf_set_absolute(inter, n * 2 + 1, opt_end);
-                      } else {
-                        printf("Fallback to unoptimized points\n");
-                        dt_masks_dynbuf_set_absolute(inter, n * 2, curr_start);
-                        dt_masks_dynbuf_set_absolute(inter, n * 2 + 1, curr_end);
-                      }
+                  if (opt_start_ordered < prev_start_ordered
+                      && prev_end_ordered < opt_end_ordered)
+                  {
+
+                    dt_masks_dynbuf_set_absolute(inter, n * 2, opt_start);
+                    dt_masks_dynbuf_set_absolute(inter, n * 2 + 1, opt_end);
+                  } else {
+                    printf("Fallback to unoptimized points\n");
+                    dt_masks_dynbuf_set_absolute(inter, n * 2, curr_start);
+                    dt_masks_dynbuf_set_absolute(inter, n * 2 + 1, curr_end);
+                  }
+
+                  // All further known intersecting segments also have to be contained
+                  // in this updated one. Proof:
+                  // Look at a segment "later" that is in the list after "prev".
+                  // - curr_start < prev_start < prev_end < curr_end
+                  // - Segment ends are monotonus: prev_end < later_end < curr_end
+                  // Cases for later_start:
+                  // if later_start < prev_start => later fully contains prev, so
+                  //                                prev would have been updated
+                  // else "later" is contained in "curr".
+
+                  inter_count = n;
+                  break;
                 }
               }
 
-              if (n == inter_count      // for loop did not exit with break
+              if (n == old_inter_count      // for loop did not exit with break
                   && prev_end_ordered < curr_start_ordered)
               {
                 // We have a new self-intersection that does not overlap the last one.
+                printf("New intersection added [%d - %d]\n", curr_start, curr_end);
 
                 int opt_start = curr_start;
                 int opt_end = curr_end;
@@ -914,6 +970,8 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
               // we find a new self-intersection portion
               int curr_start = v[k];
               int curr_end = i;
+              printf("First intersection added [%d - %d]\n", curr_start, curr_end);
+
               _optimize_intersection_points(border, border_first, posextr[1], border_count, &curr_start, &curr_end);
 
               dt_masks_dynbuf_add_2(inter, curr_start, curr_end);
@@ -935,6 +993,8 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
 
   dt_masks_dynbuf_free(extra);
   dt_free_align(binter);
+
+  dt_masks_dynbuf_debug_print(inter);
 
   // and we return the number of self-intersection found
   return inter_count;
@@ -960,6 +1020,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
   const guint nb = g_list_length(form->points);
 
   dt_masks_dynbuf_t *dpoints = NULL, *dborder = NULL, *intersections = NULL;
+  dt_masks_intbuf_t *gap_fill_segs = NULL;
 
   *points = NULL;
   *points_count = 0;
@@ -972,6 +1033,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
   if(border)
   {
     dborder = dt_masks_dynbuf_init(1000000, "path dborder");
+
     if(dborder == NULL)
     {
       dt_masks_dynbuf_free(dpoints);
@@ -980,10 +1042,14 @@ static int _path_get_pts_border(dt_develop_t *dev,
   }
 
   intersections = dt_masks_dynbuf_init(10 * MAX(nb, 1), "path intersections");
-  if(intersections == NULL)
+  gap_fill_segs = dt_masks_intbuf_init(10 * MAX(nb, 1), "path gap_fill_segs");
+  if(intersections == NULL || gap_fill_segs == NULL)
   {
     dt_masks_dynbuf_free(dpoints);
     dt_masks_dynbuf_free(dborder);
+
+    if (intersections) dt_masks_dynbuf_free(intersections);
+    if (gap_fill_segs) dt_masks_intbuf_free(gap_fill_segs);
     return 0;
   }
 
@@ -1127,7 +1193,8 @@ static int _path_get_pts_border(dt_develop_t *dev,
       {
         float bmin2[2] = { dt_masks_dynbuf_get(dborder, -22),
                            dt_masks_dynbuf_get(dborder, -21) };
-        _path_points_recurs_border_gaps(rc, rb, bmin2, bmax, dpoints, dborder,
+        _path_points_fill_border_gaps(rc, rb, bmin2, bmax, 
+                                        dpoints, dborder, gap_fill_segs,
                                         _path_is_clockwise(form));
       }
     }

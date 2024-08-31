@@ -363,6 +363,14 @@ typedef struct dt_masks_dynbuf_t
   size_t size;
 } dt_masks_dynbuf_t;
 
+typedef struct dt_masks_intbuf_t
+{
+  int *buffer;
+  char tag[128];
+  size_t pos;
+  size_t size;
+} dt_masks_intbuf_t;
+
 
 /** structure used to display a form */
 typedef struct dt_masks_form_gui_t
@@ -717,6 +725,7 @@ void dt_group_events_post_expose(cairo_t *cr,
                                  dt_masks_form_t *form,
                                  dt_masks_form_gui_t *gui);
 
+////////////////////////////////////////////////////////////
 /** code for dynamic handling of intermediate buffers */
 static inline gboolean _dt_masks_dynbuf_growto(dt_masks_dynbuf_t *a,
                                                const size_t newsize)
@@ -934,6 +943,116 @@ void dt_masks_dynbuf_debug_print(dt_masks_dynbuf_t *a)
   }
   fclose(f);
 }
+
+////////////////////////////////////////////////////////////
+// int buffer
+static inline gboolean _dt_masks_intbuf_growto(dt_masks_intbuf_t *a,
+                                               const size_t newsize)
+{
+  int *newbuf = dt_alloc_align_int(newsize);
+  if (!newbuf)
+  {
+    // not much we can do here except emit an error message
+    dt_print(DT_DEBUG_ALWAYS,
+             "critical: out of memory for intbuf '%s' with size request %zu!\n",
+             a->tag, newsize);
+    return FALSE;
+  }
+  if (a->buffer)
+  {
+    memcpy(newbuf, a->buffer, a->size * sizeof(int));
+    dt_print(DT_DEBUG_MASKS, "[masks intbuf '%s'] grows to size %lu (is %p, was %p)\n",
+             a->tag,
+             (unsigned long)a->size, newbuf, a->buffer);
+    dt_free_align(a->buffer);
+  }
+  a->size = newsize;
+  a->buffer = newbuf;
+  return TRUE;
+}
+
+
+static inline
+dt_masks_intbuf_t *dt_masks_intbuf_init(const size_t size, const char *tag)
+{
+  assert(size > 0);
+  dt_masks_intbuf_t *a = (dt_masks_intbuf_t *)calloc(1, sizeof(dt_masks_intbuf_t));
+
+  if(a != NULL)
+  {
+    g_strlcpy(a->tag, tag, sizeof(a->tag)); //only for debugging purposes
+    a->pos = 0;
+    if(_dt_masks_intbuf_growto(a, size))
+      dt_print(DT_DEBUG_MASKS, "[masks intbuf '%s'] with initial size %lu (is %p)\n",
+               a->tag,
+               (unsigned long)a->size, a->buffer);
+    if(a->buffer == NULL)
+    {
+      free(a);
+      a = NULL;
+    }
+  }
+  return a;
+}
+
+
+static inline
+void dt_masks_intbuf_add2(dt_masks_intbuf_t *a, const float value1, const float value2)
+{
+  assert(a != NULL);
+  assert(a->pos <= a->size);
+  if(__builtin_expect(a->pos + 2 >= a->size, 0))
+  {
+    if (a->size == 0 || !_dt_masks_intbuf_growto(a, 2 * (a->size+1)))
+      return;
+  }
+  a->buffer[a->pos++] = value1;
+  a->buffer[a->pos++] = value2;
+}
+
+static inline
+void dt_masks_dynbuf_get2_absolute(dt_masks_intbuf_t *a, const int position, float* value1, float* value2)
+{
+  assert(a != NULL);
+  assert(position >= 0);
+  assert((long)a->pos > position + 1);
+  *value1 = a->buffer[position];
+  *value2 = a->buffer[position + 1];
+}
+
+static inline
+size_t dt_masks_intbuf_position(dt_masks_intbuf_t *a)
+{
+  assert(a != NULL);
+  return a->pos;
+}
+
+static inline
+void dt_masks_intbuf_free(dt_masks_intbuf_t *a)
+{
+  if(a == NULL) return;
+  dt_print(DT_DEBUG_MASKS, "[masks intbuf '%s'] freed (was %p)\n", a->tag,
+          a->buffer);
+  dt_free_align(a->buffer);
+  free(a);
+}
+
+// Dump buffer to file for debugging.
+static inline
+void dt_masks_intnbuf_debug_print(dt_masks_intbuf_t *a)
+{
+  if(a == NULL) return;
+  FILE *f;
+  char filename[255] = { 0 };
+  sprintf(filename, "debug-%ld-%s", time(NULL), a->tag);
+  f = g_fopen(filename, "w");
+  for (size_t i = 0; i < a->pos; i += 2) {
+    fprintf(f, "%d %d\n", a->buffer[i], a->buffer[i+1]);
+  }
+  fclose(f);
+}
+
+////////////////////////////////////////////////////////////
 
 static inline
 int dt_masks_roundup(const int num, const int mult)
