@@ -1011,16 +1011,6 @@ void dt_masks_intbuf_add2(dt_masks_intbuf_t *a, const float value1, const float 
 }
 
 static inline
-void dt_masks_dynbuf_get2_absolute(dt_masks_intbuf_t *a, const int position, float* value1, float* value2)
-{
-  assert(a != NULL);
-  assert(position >= 0);
-  assert((long)a->pos > position + 1);
-  *value1 = a->buffer[position];
-  *value2 = a->buffer[position + 1];
-}
-
-static inline
 size_t dt_masks_intbuf_position(dt_masks_intbuf_t *a)
 {
   assert(a != NULL);

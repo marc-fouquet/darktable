@@ -697,8 +697,47 @@ static void _optimize_intersection_points(float *border,
   printf("_optimize_intersection_points: debug_dist_old = %f, debug_dist_new = %f, iter = %d\n", debug_dist_old, debug_dist_new, iter);
 }
 
+/* In general we don't want to cut out intersecting segments that
+   go "outside" of the shape, only loops that go "inside". We test
+   for this by making sure that the segment does not contain the
+   index of any extremum.
+
+   However the circles created by _path_points_fill_border_gaps
+   may weirdly loop around concave control points, so we make an
+   exception and cut them, even if they contain an extremum.
+*/
+static bool _check_valid_inside(int seq_start, int seq_end, int* extr_ord, dt_masks_intbuf_t *gap_fill_segments) {
+
+  // check if this is a fill segment loop
+  const float fill_point_cut_ratio = 0.5;  // fill points / all points
+  const float seq_len = seq_end - seq_start;
+  float fill_len = 0;
+
+  for (int i=0; i < gap_fill_segments->pos; i+=2) {
+    int fill_start = gap_fill_segments->buffer[i];
+    int fill_end   = gap_fill_segments->buffer[i+1];
+
+    if (fill_end >= seq_start && fill_start <= seq_end) {
+      fill_len += MIN(seq_end, fill_end) - MAX(seq_start, fill_start);
+    }
+  }
+  if ((fill_len / seq_len) > fill_point_cut_ratio) {
+    return true;
+  }
+
+  // check if the segment contains an extremum
+  for (int i=0; i<4; i++) {
+    if (seq_start < extr_ord[i] && extr_ord[i] < seq_end) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /** find all self intersections in a path */
 static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
+                                        dt_masks_intbuf_t *gap_fill_segments,
                                         const int nb_corners,
                                         float *border,
                                         const int border_count)
@@ -713,6 +752,8 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
 
   // _debug_print_border(_nb_ctrl_point(nb_corners), border_count, border);
   int border_first = _nb_ctrl_point(nb_corners);  // the control points are stored before the border points
+  int nb_border_points = border_count - border_first; // number of bp without control points
+
   for(int i = border_first; i < border_count; i++)
   {
     if((border[i * 2] == DT_INVALID_COORDINATE) || (border[i * 2 + 1] == DT_INVALID_COORDINATE))
@@ -741,6 +782,13 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
       posextr[3] = i;
     }
   }
+
+  // posextr[1] will be our loop start. Prevent wrap-around checks later.
+  int posextr_ord[4];
+  for (int i = 0; i < 4; i++) {
+    posextr_ord[i] = posextr[i] >= posextr[1] ? posextr[i] : posextr[i] + nb_border_points;
+  }
+
   xmin -= 1, ymin -= 1;
   xmax += 1, ymax += 1;
   const int hb = ymax - ymin;
@@ -767,8 +815,6 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
   // from border shape extrema (here x_max)
   int lastx = border[(posextr[1] - 1) * 2];
   int lasty = border[(posextr[1] - 1) * 2 + 1];
-
-  int nb_border_points = border_count - border_first;
 
   for(int ii = border_first; ii < border_count; ii++)
   {
@@ -811,26 +857,29 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
           // there's already a border point "registered" at this
           // coordinate.  so we've potentially found a
           // self-intersection portion between v[k] and i
+
+          int curr_start = v[k];
+          int curr_end = i;
+
+          printf("Candidate intersection: [%d - %d]\n", curr_start, curr_end);
+
+          int curr_start_ordered = curr_start >= posextr[1] ? curr_start : curr_start + nb_border_points;
+          int curr_end_ordered = curr_end >= posextr[1] ? curr_end : curr_end + nb_border_points;
+          assert(curr_start_ordered <= curr_end_ordered);
+
           if((xx == lastx && yy == lasty) || v[k] == i - 1)
           {
             // we haven't move from last point.
             // this is not a real self-interesection, so we just update binter
             binter[idx] = i;
           }
-          else if((i > v[k]
-                   && ((posextr[0] < v[k] || posextr[0] > i)
-                       && (posextr[1] < v[k] || posextr[1] > i)
-                       && (posextr[2] < v[k] || posextr[2] > i)
-                       && (posextr[3] < v[k] || posextr[3] > i)))
-                  || (i < v[k]
-                      && posextr[0] < v[k] && posextr[0] > i
-                      && posextr[1] < v[k] && posextr[1] > i
-                      && posextr[2] < v[k] && posextr[2] > i
-                      && posextr[3] < v[k] && posextr[3] > i))
+          else if(_check_valid_inside(curr_start, curr_end,
+                                      posextr_ord, gap_fill_segments))
           {
             // we have found a self-intersection portion, between v[k]
-            // and i and we are sure that this portion doesn't include
-            // one of the shape extrema
+            // and i and we are sure that this portion either doesn't
+            // include one of the shape extrema or it is a filler
+            // segment.
             if(inter_count > 0)
             {
 
@@ -840,15 +889,7 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
               // this could happen in or between our self-intersecting
               // regions.
 
-              int curr_start = v[k];
-              int curr_end = i;
 
-              printf("Candidate intersection: [%d - %d]\n", curr_start, curr_end);
-
-              int curr_start_ordered = curr_start >= posextr[1] ? curr_start : curr_start + nb_border_points;
-              int curr_end_ordered = curr_end >= posextr[1] ? curr_end : curr_end + nb_border_points;
-
-              assert(curr_start_ordered <= curr_end_ordered);
 
               int prev_start;
               int prev_end;
@@ -968,8 +1009,6 @@ static int _path_find_self_intersection(dt_masks_dynbuf_t *inter,
             else // inter_count == 0
             {
               // we find a new self-intersection portion
-              int curr_start = v[k];
-              int curr_end = i;
               printf("First intersection added [%d - %d]\n", curr_start, curr_end);
 
               _optimize_intersection_points(border, border_first, posextr[1], border_count, &curr_start, &curr_end);
@@ -1043,6 +1082,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
 
   intersections = dt_masks_dynbuf_init(10 * MAX(nb, 1), "path intersections");
   gap_fill_segs = dt_masks_intbuf_init(10 * MAX(nb, 1), "path gap_fill_segs");
+
   if(intersections == NULL || gap_fill_segs == NULL)
   {
     dt_masks_dynbuf_free(dpoints);
@@ -1193,7 +1233,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
       {
         float bmin2[2] = { dt_masks_dynbuf_get(dborder, -22),
                            dt_masks_dynbuf_get(dborder, -21) };
-        _path_points_fill_border_gaps(rc, rb, bmin2, bmax, 
+        _path_points_fill_border_gaps(rc, rb, bmin2, bmax,
                                         dpoints, dborder, gap_fill_segs,
                                         _path_is_clockwise(form));
       }
@@ -1220,7 +1260,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
   if(border)
   {
 
-    inter_count = _path_find_self_intersection(intersections, nb, *border, *border_count);
+    inter_count = _path_find_self_intersection(intersections, gap_fill_segs, nb, *border, *border_count);
 
     dt_print(DT_DEBUG_MASKS | DT_DEBUG_PERF,
              "[masks %s] path_points self-intersect took %0.04f sec\n", form->name,
@@ -1267,6 +1307,8 @@ static int _path_get_pts_border(dt_develop_t *dev,
              form->name, dt_get_lap_time(&start2));
 
     dt_masks_dynbuf_free(intersections);
+    dt_masks_intbuf_free(gap_fill_segs);
+
     dt_free_align(border_init);
     return 1;
   }
@@ -1320,6 +1362,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
                dt_get_lap_time(&start2));
 
       dt_masks_dynbuf_free(intersections);
+      dt_masks_intbuf_free(gap_fill_segs);
       dt_free_align(border_init);
       return 1;
     }
@@ -1328,6 +1371,7 @@ static int _path_get_pts_border(dt_develop_t *dev,
   // if we failed, then free all and return
 fail:
   dt_masks_dynbuf_free(intersections);
+  dt_masks_intbuf_free(gap_fill_segs);
   dt_free_align(border_init);
   dt_free_align(*points);
   *points = NULL;
