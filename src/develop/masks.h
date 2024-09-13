@@ -902,6 +902,14 @@ size_t dt_masks_dynbuf_position(dt_masks_dynbuf_t *a)
 }
 
 static inline
+void dt_masks_dynbuf_reset_position(dt_masks_dynbuf_t *a, const size_t newpos)
+{
+  assert(a != NULL);
+  assert(newpos <= a->pos);
+  a->pos = newpos;
+}
+
+static inline
 void dt_masks_dynbuf_reset(dt_masks_dynbuf_t *a)
 {
   assert(a != NULL);
@@ -931,17 +939,27 @@ void dt_masks_dynbuf_free(dt_masks_dynbuf_t *a)
 
 // Dump buffer to file for debugging.
 static inline
-void dt_masks_dynbuf_debug_print(dt_masks_dynbuf_t *a)
+void dt_masks_dynbuf_debug_print(dt_masks_dynbuf_t *a, gboolean to_stdout)
 {
   if(a == NULL) return;
-  FILE *f;
-  char filename[255] = { 0 };
-  sprintf(filename, "debug-%ld-%s", time(NULL), a->tag);
-  f = g_fopen(filename, "w");
-  for (size_t i = 0; i < a->pos; i += 2) {
-    fprintf(f, "%f %f\n", a->buffer[i], a->buffer[i+1]);
+  if (to_stdout) {
+    printf("'%s' buffer: ", a->tag);
+    for (size_t i = 0; i < a->pos; i += 2) {
+      printf("(%f %f), ", a->buffer[i], a->buffer[i+1]);
+    }
+    printf("\n");
   }
-  fclose(f);
+  else
+  {
+    FILE *f;
+    char filename[255] = { 0 };
+    sprintf(filename, "debug-%ld-%s", time(NULL), a->tag);
+    f = g_fopen(filename, "w");
+    for (size_t i = 0; i < a->pos; i += 2) {
+      fprintf(f, "%f %f\n", a->buffer[i], a->buffer[i+1]);
+    }
+    fclose(f);
+  }
 }
 
 ////////////////////////////////////////////////////////////
