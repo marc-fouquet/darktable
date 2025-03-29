@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2010-2024 darktable developers.
+    Copyright (C) 2010-2025 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -212,6 +212,8 @@ const char *cl_errstr(cl_int error)
       return "DT_OPENCL_PROCESS_CL";
     case DT_OPENCL_NODEVICE:
       return "DT_OPENCL_NODEVICE";
+    case DT_OPENCL_DT_EXCEPTION:
+      return "DT_OPENCL_DT_EXCEPTION";
     default:
       return "Unknown OpenCL error";
   }
@@ -471,6 +473,8 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
   cl->dev[dev].used_global_mem = 0;
   cl->dev[dev].nvidia_sm_20 = FALSE;
   cl->dev[dev].fullname = NULL;
+  cl->dev[dev].platform = NULL;
+  cl->dev[dev].device_version = NULL;
   cl->dev[dev].cname = NULL;
   cl->dev[dev].options = NULL;
   cl->dev[dev].cflags = NULL;
@@ -493,6 +497,7 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
   cl->dev[dev].asyncmode = FALSE;
   cl->dev[dev].disabled = FALSE;
   cl->dev[dev].headroom = 0;
+  cl->dev[dev].vendor_id = 0;
   cl->dev[dev].tunehead = FALSE;
   cl_device_id devid = cl->dev[dev].devid = devices[k];
 
@@ -634,8 +639,10 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
   cl->crc = crc32(cl->crc, (const unsigned char *)platform_name, strlen(platform_name));
   cl->crc = crc32(cl->crc, (const unsigned char *)device_name, strlen(device_name));
 
+  cl->dev[dev].platform = strdup(platform_name);
   cl->dev[dev].fullname = strdup(fullname);
   cl->dev[dev].cname = strdup(cname);
+  cl->dev[dev].vendor_id = vendor_id;
 
   const gboolean newdevice = dt_opencl_read_device_config(dev);
   dt_print_nts(DT_DEBUG_OPENCL,
@@ -646,7 +653,7 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
                DT_CLDEVICE_HEAD, cl->dev[dev].cname);
   dt_print_nts(DT_DEBUG_OPENCL,
                "   PLATFORM, VENDOR & ID:    %s, %s%s, ID=%d\n",
-               platform_display_name, is_mesa ? "Mesa:" : "", platform_vendor, vendor_id);
+               cl->dev[dev].platform, is_mesa ? "Mesa:" : "", platform_vendor, vendor_id);
   dt_print_nts(DT_DEBUG_OPENCL,
                "   CANONICAL NAME:           %s\n", cl->dev[dev].cname);
 
@@ -671,6 +678,7 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
     cl->dev[dev].disabled |= TRUE;
     goto end;
   }
+  cl->dev[dev].device_version = strdup(deviceversion);
 
   (cl->dlocl->symbols->dt_clGetDeviceInfo)(devid, CL_DEVICE_TYPE,
                                            sizeof(cl_device_type), &type, NULL);
@@ -707,7 +715,7 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
     cl->dev[dev].micro_nap = (is_cpu_device) ? 1000 : 250;
 
   dt_print_nts(DT_DEBUG_OPENCL, "   DRIVER VERSION:           %s\n", driverversion);
-  dt_print_nts(DT_DEBUG_OPENCL, "   DEVICE VERSION:           %s%s\n", deviceversion,
+  dt_print_nts(DT_DEBUG_OPENCL, "   DEVICE VERSION:           %s%s\n", cl->dev[dev].device_version,
      cl->dev[dev].nvidia_sm_20 ? ", SM_20 SUPPORT" : "");
   dt_print_nts(DT_DEBUG_OPENCL, "   DEVICE_TYPE:              %s%s%s%s\n",
       ((type & CL_DEVICE_TYPE_CPU) == CL_DEVICE_TYPE_CPU) ? "CPU" : "",
@@ -783,7 +791,7 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
     goto end;
   }
 
-  const gboolean is_blacklisted = dt_opencl_check_driver_blacklist(deviceversion);
+  const gboolean is_blacklisted = _opencl_check_driver_blacklist(deviceversion);
 
   // disable device for now if this is the first time detected and blacklisted too.
   if(newdevice && is_blacklisted)
@@ -958,6 +966,8 @@ static gboolean _opencl_device_init(dt_opencl_t *cl,
 
   dt_print_nts(DT_DEBUG_OPENCL, "   CL COMPILER OPTION:       %s\n", my_option);
   dt_print_nts(DT_DEBUG_OPENCL, "   CL COMPILER COMMAND:      %s\n", cl->dev[dev].options);
+
+  _write_test_exceptions(&cl->dev[dev]);
 
   g_free(compile_option_name_cname);
   g_free(my_option);
@@ -1510,6 +1520,8 @@ finally:
         free(cl->dev[i].eventtags);
       }
       free((void *)(cl->dev[i].fullname));
+      free((void *)(cl->dev[i].device_version));
+      free((void *)(cl->dev[i].platform));
       free((void *)(cl->dev[i].cname));
       free((void *)(cl->dev[i].options));
       free((void *)(cl->dev[i].cflags));
@@ -1597,6 +1609,8 @@ void dt_opencl_cleanup(dt_opencl_t *cl)
       }
 
       free((void *)(cl->dev[i].fullname));
+      free((void *)(cl->dev[i].device_version));
+      free((void *)(cl->dev[i].platform));
       free((void *)(cl->dev[i].cname));
       free((void *)(cl->dev[i].options));
       free((void *)(cl->dev[i].cflags));
@@ -2867,15 +2881,21 @@ int dt_opencl_read_host_from_device_raw(const int devid,
   if(!_cldev_running(devid))
     return DT_OPENCL_NODEVICE;
 
-  cl_event *eventp = _opencl_events_get_slot(devid,
-                                               "[Read Image (from device to host)]");
+  cl_event *eventp = _opencl_events_get_slot(devid, "[Read Image (from device to host)]");
 
-  return (darktable.opencl->dlocl->symbols->dt_clEnqueueReadImage)
+  const cl_int err = (darktable.opencl->dlocl->symbols->dt_clEnqueueReadImage)
     (darktable.opencl->dev[devid].cmd_queue,
      device,
      blocking ? CL_TRUE : CL_FALSE,
      origin, region, rowpitch,
      0, host, 0, NULL, eventp);
+
+  if(err != CL_SUCCESS)
+    dt_print(DT_DEBUG_OPENCL,
+             "[dt_opencl_read_host_from_device_raw] could not read from device '%s' id=%d: %s",
+             darktable.opencl->dev[devid].fullname, devid, cl_errstr(err));
+
+  return err;
 }
 
 int dt_opencl_write_host_to_device(const int devid,
@@ -2954,6 +2974,10 @@ int dt_opencl_write_host_to_device_raw(const int devid,
      device, blocking ? CL_TRUE : CL_FALSE,
      origin, region,
      rowpitch, 0, host, 0, NULL, eventp);
+  if(err != CL_SUCCESS)
+    dt_print(DT_DEBUG_OPENCL,
+             "[dt_opencl_write_host_to_device_raw] could not write to device '%s' id=%d: %s",
+             darktable.opencl->dev[devid].fullname, devid, cl_errstr(err));
   _check_clmem_err(devid, err);
   return err;
 }
@@ -3652,6 +3676,12 @@ gboolean dt_opencl_is_enabled(void)
 gboolean dt_opencl_running(void)
 {
   return _cl_running();
+}
+
+gboolean dt_opencl_exception(const int devid, const uint32_t mask)
+{
+  if(!_cldev_running(devid)) return FALSE;
+  return (darktable.opencl->dev[devid].exceptions & mask) != 0;
 }
 
 /** update enabled flag and profile with value from preferences */

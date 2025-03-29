@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2017-2024 darktable developers.
+    Copyright (C) 2017-2025 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -241,7 +241,7 @@ void gui_init(dt_iop_module_t *self)
   g->A0[0] = NAN;
   g->A0[1] = NAN;
   g->A0[2] = NAN;
-  g->hash = 0;
+  g->hash = DT_INVALID_CACHEHASH;
 
   g->strength = dt_bauhaus_slider_from_params(self, N_("strength"));
   gtk_widget_set_tooltip_text(g->strength, _("amount of haze reduction"));
@@ -530,7 +530,6 @@ static float _ambient_light(const const_rgb_image img,
     : logf(FLT_MAX) / 2; // return the maximal depth
 }
 
-
 void process(dt_iop_module_t *self,
              dt_dev_pixelpipe_iop_t *piece,
              const void *const ivoid,
@@ -627,14 +626,10 @@ void process(dt_iop_module_t *self,
   gray_image trans_map_filtered = new_gray_image(width, height);
   // apply guided filter with no clipping
   guided_filter(img_in.data, trans_map.data, trans_map_filtered.data,
-                width, height, 4, w2, eps, 1.f, -FLT_MAX,
-                FLT_MAX);
+                width, height, 4, w2, eps, 1.f, -FLT_MAX, FLT_MAX);
 
-  // finally, calculate the haze-free image
-  const float t_min
-      = fminf(fmaxf(expf(-distance * distance_max),
-                    1.f / 1024),
-              1.f); // minimum allowed value for transition map
+  // finally, calculate the haze-free image, minimum allowed value for transition map
+  const float t_min = CLAMP(expf(-distance * distance_max), 1.0f / 1024.0f, 1.0f);
 
   const dt_aligned_pixel_t c_A0 = { A0[0], A0[1], A0[2], A0[3] };
   const gray_image c_trans_map_filtered = trans_map_filtered;
@@ -905,15 +900,11 @@ int process_cl(dt_iop_module_t *self,
 
   // apply guided filter with no clipping
   err = guided_filter_cl(devid, img_in, trans_map, trans_map_filtered,
-                         width, height, ch, w2, eps, 1.f, -CL_FLT_MAX,
-                         CL_FLT_MAX);
+                         width, height, ch, w2, eps, 1.f, -CL_FLT_MAX, CL_FLT_MAX);
   if(err != CL_SUCCESS) goto error;
 
   // finally, calculate the haze-free image
-  const float t_min
-      = fminf(fmaxf(expf(-distance * distance_max),
-                    1.f / 1024),
-              1.f); // minimum allowed value for transition map
+  const float t_min = CLAMP(expf(-distance * distance_max), 1.0f / 1024.0f, 1.0f);
   err = _dehaze_cl(self, devid, img_in, trans_map_filtered, img_out, t_min, A0);
 
 error:

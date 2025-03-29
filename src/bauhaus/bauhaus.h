@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2012-2021 darktable developers.
+    Copyright (C) 2012-2025 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -185,7 +185,6 @@ typedef struct dt_bauhaus_popup_t
   GdkRectangle position;
   int offset;
   int offcut;
-  gboolean composited;
 } dt_bauhaus_popup_t;
 
 typedef struct dt_bauhaus_t
@@ -276,12 +275,12 @@ void dt_bauhaus_widget_set_quad_visibility(GtkWidget *w,
 void dt_bauhaus_widget_set_quad_tooltip(GtkWidget *w,
                                         const gchar *text);
 // helper macro to set all quad properties at once
-inline void dt_bauhaus_widget_set_quad(GtkWidget *w,
-                                       dt_iop_module_t *self,
-                                       dt_bauhaus_quad_paint_f paint,
-                                       int toggle,
-                                       void (*callback)(GtkWidget *a, dt_iop_module_t *b),
-                                       const gchar *tooltip)
+static inline void dt_bauhaus_widget_set_quad(GtkWidget *w,
+                                              dt_iop_module_t *self,
+                                              dt_bauhaus_quad_paint_f paint,
+                                              int toggle,
+                                              void (*callback)(GtkWidget *a, dt_iop_module_t *b),
+                                              const gchar *tooltip)
 {
   dt_bauhaus_widget_set_quad_paint(w, paint, 0, NULL);
   dt_bauhaus_widget_set_quad_toggle(w, toggle);
@@ -470,12 +469,6 @@ void dt_bauhaus_combobox_set_entries_ellipsis(GtkWidget *widget,
                                               PangoEllipsizeMode ellipis);
 PangoEllipsizeMode dt_bauhaus_combobox_get_entries_ellipsis(GtkWidget *widget);
 void dt_bauhaus_combobox_mute_scrolling(GtkWidget *widget);
-
-// key accel parsing:
-// execute a line of input
-void dt_bauhaus_vimkey_exec(const char *input);
-// give autocomplete suggestions
-GList *dt_bauhaus_vimkey_complete(const char *input);
 
 static inline void set_color(cairo_t *cr, GdkRGBA color)
 {

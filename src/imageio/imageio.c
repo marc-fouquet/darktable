@@ -171,7 +171,7 @@ static dt_imageio_retval_t _unsupported_type(dt_image_t *img,
 #define dt_imageio_open_gm _unsupported_type
 #endif
 
-#ifndef HAVE_IMAGESMAGICK
+#ifndef HAVE_IMAGEMAGICK
 #define dt_imageio_open_im _unsupported_type
 #endif
 
@@ -225,20 +225,26 @@ static const dt_magic_bytes_t _magic_signatures[] = {
   // WEBP image
   { DT_FILETYPE_WEBP, FALSE, 8, 4, dt_imageio_open_webp,
     { 'W', 'E', 'B', 'P' } },  // full signature is RIFF????WEPB, where ???? is the file size
-  // HEIC/HEIF image
-  { DT_FILETYPE_HEIC, FALSE, 4, 8, dt_imageio_open_heif,
-    { 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c' } },
-  { DT_FILETYPE_HEIC, TRUE, 4, 8, dt_imageio_open_heif,
-    { 'f', 't', 'y', 'p', 'h', 'e', 'i', 'x' } }, // 10-bit
+  // HEIC/HEIF images
+  // this matches heic, heix, heim, heis, hevc, hevx, hevm and hevs major brands
+  { DT_FILETYPE_HEIC, FALSE, 4, 6, dt_imageio_open_heif,
+    { 'f', 't', 'y', 'p', 'h', 'e' } },
   { DT_FILETYPE_HEIC, FALSE, 4, 8, dt_imageio_open_heif,
     { 'f', 't', 'y', 'p', 'j', '2', 'k', 'i' } }, // JPEG 2000 encapsulated in HEIF
   { DT_FILETYPE_HEIC, FALSE, 4, 8, dt_imageio_open_heif,
     { 'f', 't', 'y', 'p', 'a', 'v', 'c', 'i' } }, // AVC (H.264) encoded HEIF
   // AVIF image
-  { DT_FILETYPE_AVIF, TRUE, 4, 8, dt_imageio_open_avif,
-    { 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f' } },
-//  { DT_FILETYPE_AVIF, TRUE, 4, 8, dt_imageio_open_avif,
-//    { 'f', 't', 'y', 'p', 'm', 'i', 'f', '1' } },  //alternate? HEIF or AVIF, depending on bytes 16-19
+  // this matches 'avif' and 'avis'
+  { DT_FILETYPE_AVIF, TRUE, 4, 7, dt_imageio_open_avif,
+    { 'f', 't', 'y', 'p', 'a', 'v', 'i' } },
+  // Technically, files with major brand names starting with 'mif' or 'msf'
+  // can be either HEIF or AVIF files, depending on information in the
+  // next bytes. But the HEIF loader can read files of both formats, so
+  // that's the loader we're calling in this case.
+  { DT_FILETYPE_AVIF, TRUE, 4, 7, dt_imageio_open_heif,
+    { 'f', 't', 'y', 'p', 'm', 'i', 'f' } },
+  { DT_FILETYPE_AVIF, TRUE, 4, 7, dt_imageio_open_heif,
+    { 'f', 't', 'y', 'p', 'm', 's', 'f' } },
   // Quite OK Image Format (QOI)
   { DT_FILETYPE_QOI, FALSE, 0, 4, dt_imageio_open_qoi,
     { 'q', 'o', 'i', 'f' } },
@@ -294,7 +300,7 @@ static const dt_magic_bytes_t _magic_signatures[] = {
   { DT_FILETYPE_RW2, TRUE, 0, 8, dt_imageio_open_rawspeed,
     { 'I', 'I', 'U', 0x00, 0x08, 0x00, 0x00, 0x00 } },
   // Sigma Foveon X3F file
-  { DT_FILETYPE_X3F, TRUE, 0, 4, NULL,
+  { DT_FILETYPE_X3F, TRUE, 0, 4, dt_imageio_open_libraw,
     { 'F', 'O', 'V', 'b' } },
   // Nikon NEF files are TIFFs with (usually) the string "NIKON CORP" early in the file
   { DT_FILETYPE_NEF, FALSE, 0, 4, dt_imageio_open_rawspeed,
@@ -1610,26 +1616,6 @@ dt_imageio_retval_t dt_imageio_open(dt_image_t *img,
     // fallback that tries to open file via LibRaw to support Canon CR3
     if(!_image_handled(ret))
       ret = dt_imageio_open_libraw(img, filename, buf);
-
-    // there are reports that AVIF and HEIF files with alternate magic bytes exist, so try loading
-    // as such if we haven't yet succeeded
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_avif(img, filename, buf);
-
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_heif(img, filename, buf);
-
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_exr(img, filename, buf);
-
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_rgbe(img, filename, buf);
-
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_j2k(img, filename, buf);
-
-    if(!_image_handled(ret))
-      ret = dt_imageio_open_jpeg(img, filename, buf);
 
     // final fallback that tries to open file via GraphicsMagick or ImageMagick
     if(!_image_handled(ret))

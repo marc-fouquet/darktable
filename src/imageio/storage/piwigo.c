@@ -1100,6 +1100,7 @@ void gui_init(dt_imageio_module_storage_t *self)
   // album list
   ui->album_list = dt_bauhaus_combobox_new_action(DT_ACTION(self)); // Available albums
   dt_bauhaus_widget_set_label(ui->album_list, NULL, N_("album"));
+  gtk_widget_set_hexpand(GTK_WIDGET(ui->album_list), TRUE);
   g_signal_connect(G_OBJECT(ui->album_list), "value-changed",
                    G_CALLBACK(_piwigo_album_changed), (gpointer)ui);
   gtk_widget_set_sensitive(ui->album_list, FALSE);
@@ -1111,6 +1112,7 @@ void gui_init(dt_imageio_module_storage_t *self)
 
   // new album
   ui->new_album_entry = GTK_ENTRY(gtk_entry_new()); // Album title
+  gtk_widget_set_hexpand(GTK_WIDGET(ui->new_album_entry), TRUE);
   gtk_entry_set_text(ui->new_album_entry, _("new album"));
   gtk_entry_set_width_chars(GTK_ENTRY(ui->new_album_entry), 0);
 

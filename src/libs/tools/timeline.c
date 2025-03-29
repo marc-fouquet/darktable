@@ -666,9 +666,9 @@ static int _block_get_at_zoom(dt_lib_module_t *self, int width)
   gchar *query = g_strdup_printf("SELECT db.datetime_taken AS dt,"
                                  " col.imgid FROM main.images AS db "
                                  "LEFT JOIN memory.collected_images AS col ON db.id=col.imgid "
-                                 "WHERE dt > %ld "
+                                 "WHERE dt > %lld "
                                  "ORDER BY dt ASC",
-                                 (long int)_time_format_for_db(strip->time_pos, strip->zoom));
+                                 (long long)_time_format_for_db(strip->time_pos, strip->zoom));
   // clang-format on
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), query, -1, &stmt, NULL);
 
@@ -917,13 +917,9 @@ static gboolean _lib_timeline_draw_callback(GtkWidget *widget, cairo_t *wcr, dt_
   // windows could have been expanded for example, we need to create a new surface of the good size and redraw
   if(width != strip->panel_width || height != strip->panel_height)
   {
-    // if it's the first show, we need to recompute the scroll too
-    if(strip->panel_width == 0 || strip->panel_height == 0)
-    {
-      strip->panel_width = width;
-      strip->panel_height = height;
-      strip->time_pos = _selection_scroll_to(strip->start_t, strip);
-    }
+    strip->panel_width = width;
+    strip->panel_height = height;
+    strip->time_pos = _selection_scroll_to(strip->start_t, strip);
     if(strip->surface)
     {
       cairo_surface_destroy(strip->surface);

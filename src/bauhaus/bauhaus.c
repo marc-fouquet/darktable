@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    Copyright (C) 2012-2024 darktable developers.
+    Copyright (C) 2012-2025 darktable developers.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -462,23 +462,18 @@ static void _window_moved_to_rect(GdkWindow *window,
 static void _window_position(const int offset)
 {
   dt_bauhaus_popup_t *pop = &darktable.bauhaus->popup;
-
-  if(pop->composited && gtk_widget_get_visible(pop->window))
-  {
-    pop->offcut += offset;
-    return;
-  }
-
   int height = pop->position.height;
-  pop->offset += offset;
 
-  pop->composited = FALSE;
   // On Xwayland gdk_screen_is_composited is TRUE but popups are opaque
   // So we need to explicitly test for pure wayland
 #ifdef GDK_WINDOWING_WAYLAND
   if(GDK_IS_WAYLAND_DISPLAY(gtk_widget_get_display(pop->window)))
   {
-    pop->composited = TRUE;
+    if(gtk_widget_get_visible(pop->window))
+    {
+      pop->offcut += offset;
+      return;
+    }
     gtk_widget_set_app_paintable(pop->window, TRUE);
     GdkScreen *screen = gtk_widget_get_screen(pop->window);
     GdkVisual *visual = gdk_screen_get_rgba_visual(screen);
@@ -487,6 +482,8 @@ static void _window_position(const int offset)
     gtk_widget_set_visual(pop->window, visual);
   }
 #endif
+
+  pop->offset += offset;
 
   if(pop->offcut > 0)
     pop->offcut = MAX(0, pop->offcut + offset);
@@ -3510,103 +3507,6 @@ static gboolean _widget_motion_notify(GtkWidget *widget,
 
   gtk_widget_queue_draw(widget);
   return TRUE;
-}
-
-void dt_bauhaus_vimkey_exec(const char *input)
-{
-  dt_action_t *ac = darktable.control->actions_iops.target;
-  input += 5; // skip ":set "
-
-  while(ac)
-  {
-    const int prefix = strcspn(input, ".=");
-
-    if(ac->type >= DT_ACTION_TYPE_WIDGET ||
-       ac->type <= DT_ACTION_TYPE_SECTION)
-    {
-      if(!strncasecmp(ac->label, input, prefix))
-      {
-        if(!ac->label[prefix])
-        {
-          input += prefix;
-          if(*input) input++; // skip . or =
-
-          if(ac->type <= DT_ACTION_TYPE_SECTION)
-          {
-            ac = ac->target;
-            continue;
-          }
-          else
-            break;
-        }
-      }
-    }
-
-    ac = ac->next;
-  }
-
-  if(!ac
-     || ac->type != DT_ACTION_TYPE_WIDGET
-     || !ac->target
-     || !DT_IS_BAUHAUS_WIDGET(ac->target))
-    return;
-
-  float old_value = .0f, new_value = .0f;
-
-  GtkWidget *w = ac->target;
-
-  switch(DT_BAUHAUS_WIDGET(w)->type)
-  {
-    case DT_BAUHAUS_SLIDER:
-      old_value = dt_bauhaus_slider_get(w);
-      new_value = dt_calculator_solve(old_value, input);
-      dt_print(DT_DEBUG_ALWAYS, " = %f", new_value);
-      if(dt_isfinite(new_value))
-        dt_bauhaus_slider_set(w, new_value);
-      break;
-    case DT_BAUHAUS_COMBOBOX:
-      // TODO: what about text as entry?
-      old_value = dt_bauhaus_combobox_get(w);
-      new_value = dt_calculator_solve(old_value, input);
-      dt_print(DT_DEBUG_ALWAYS, " = %f", new_value);
-      if(dt_isfinite(new_value))
-        dt_bauhaus_combobox_set(w, new_value);
-      break;
-    default:
-      break;
-  }
-}
-
-// give autocomplete suggestions
-GList *dt_bauhaus_vimkey_complete(const char *input)
-{
-  GList *res = NULL;
-
-  dt_action_t *ac = darktable.control->actions_iops.target;
-
-  while(ac)
-  {
-    const int prefix = strcspn(input, ".");
-
-    if(ac->type >= DT_ACTION_TYPE_WIDGET ||
-       ac->type <= DT_ACTION_TYPE_SECTION)
-    {
-      if(!prefix || !strncasecmp(ac->label, input, prefix))
-      {
-        if(!ac->label[prefix] && input[prefix] == '.')
-        {
-            input += prefix + 1;
-          if(ac->type <= DT_ACTION_TYPE_SECTION) ac = ac->target;
-          continue;
-        }
-        else
-          res = g_list_append(res, (gchar *)ac->label + prefix);
-      }
-    }
-
-    ac = ac->next;
-  }
-  return res;
 }
 
 void dt_bauhaus_combobox_mute_scrolling(GtkWidget *widget)

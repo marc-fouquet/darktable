@@ -233,6 +233,13 @@ const model_map_t modelMap[] = {
   },
   {
     .exif_make = "Canon",
+    .exif_model = "Canon EOS R5 C",
+    .clean_make = "Canon",
+    .clean_model = "EOS R5 C",
+    .clean_alias = "EOS R5 C"
+  },
+  {
+    .exif_make = "Canon",
     .exif_model = "Canon EOS R6m2",
     .clean_make = "Canon",
     .clean_model = "EOS R6 Mark II",
@@ -282,7 +289,7 @@ static gboolean _supported_image(const gchar *filename)
   // At the moment of writing this code CR3 files are not supported by RawSpeed,
   // so they are always processed by LibRaw.
   gchar *extensions_whitelist;
-  const gchar *always_by_libraw = "cr3";
+  const gchar *always_by_libraw = "cr3 x3f";
 
   gchar *ext = g_strrstr(filename, ".");
   if(!ext)

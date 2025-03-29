@@ -101,9 +101,27 @@ changes (where available).
   styles and presets too (and the bug that style shortcuts were not
   translated is fixed).
 
+- Give a hint for pending background work when darktable is closing.
+
+- Improved rendering output of denoiseprofile, dither and nlmeans on
+  second window or in high quality processing mode.
+
+- Hide "reduce resolution of preview image" preference setting. This
+  was a way to get better responsiveness on slow systems introduced in
+  2020, but at the same time it was making the color picker and mask
+  support inaccurate (quality loss).
+
+- Improved quality of inpaint opposed highlight recovery algorithm for
+  sRAW images.
+
 ## Bug Fixes
 
 - Fixed sidecar writing if quitting from darkroom.
+
+- Fixed some rare race conditions while processing the pixelpipes.
+
+- Fixed collection filter presets based on capture time creating an
+  empty widget.
 
 ## Lua
 

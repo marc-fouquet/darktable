@@ -1,6 +1,6 @@
 /*
    This file is part of darktable,
-   Copyright (C) 2010-2024 darktable developers.
+   Copyright (C) 2010-2025 darktable developers.
 
    darktable is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -186,7 +186,7 @@ int default_group()
 
 int flags()
 {
-  return IOP_FLAGS_SUPPORTS_BLENDING | IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_ONE_INSTANCE;
+  return IOP_FLAGS_SUPPORTS_BLENDING | IOP_FLAGS_ALLOW_TILING | IOP_FLAGS_ONE_INSTANCE | IOP_FLAGS_WRITE_RASTER;
 }
 
 dt_iop_colorspace_type_t default_colorspace(dt_iop_module_t *self,
@@ -333,9 +333,6 @@ void distort_mask(dt_iop_module_t *self,
   dt_iop_copy_image_roi(out, in, 1, roi_in, roi_out);
 }
 
-/* inpaint opposed and segmentation based algorithms want the whole image for proper calculation
-   of chrominance correction and best candidates so we change both rois.
-*/
 void modify_roi_out(dt_iop_module_t *self,
                     dt_dev_pixelpipe_iop_t *piece,
                     dt_iop_roi_t *roi_out,
@@ -347,6 +344,9 @@ void modify_roi_out(dt_iop_module_t *self,
   roi_out->y = MAX(0, roi_in->y);
 }
 
+/* inpaint opposed and segmentation based algorithms want the whole image for proper calculation
+   of chrominance correction and best candidates.
+*/
 void modify_roi_in(dt_iop_module_t *self,
                    dt_dev_pixelpipe_iop_t *piece,
                    const dt_iop_roi_t *const roi_out,
@@ -356,29 +356,29 @@ void modify_roi_in(dt_iop_module_t *self,
 
   dt_iop_highlights_data_t *d = piece->data;
   const gboolean use_opposing = (d->mode == DT_IOP_HIGHLIGHTS_OPPOSED) || (d->mode == DT_IOP_HIGHLIGHTS_SEGMENTS);
-  /* When do we need to expand the roi to maximum of the full input data?
-     1. Certainly not if any other than opposed or the segmentation based algo is used.
-   */
+
+  // Whenever we use opposed we have to setup the desired roi_in area
   if(!use_opposing)
     return;
 
-  /*
-    2. Certainly not for linear raws as they miss the automatic downscaler provided by the demosaicer stage, so
-       the expanding to full image data does not work as we do a downscaling very early in
-       the pixelpipe. So - no quality achieved but really bad performance.
-       See #12998 and #12993 for a lengthy discussion
-  */
-  if(piece->pipe->dsc.filters == 0)
-    return;
-
-  /* We require the correct (full-image-data) expansion with a defined scale for all pixelpipes for proper
-     aligning and scaling in the demosiacer
-  */
-  roi_in->x = 0;
-  roi_in->y = 0;
-  roi_in->width = piece->buf_in.width;
-  roi_in->height = piece->buf_in.height;
   roi_in->scale = 1.0f;
+  if(piece->pipe->dsc.filters == 0)
+  {
+    // For linear raws we will use an internal downscaler as we normally do in demosaic
+    roi_in->x /= roi_out->scale;
+    roi_in->y /= roi_out->scale;
+    roi_in->width /= roi_out->scale;
+    roi_in->height /= roi_out->scale;
+  }
+  else
+  {
+    // We require the correct (full-image-data) expansion with a defined scale for all pixelpipes for proper
+    // aligning and scaling in the demosiacer
+    roi_in->x = 0;
+    roi_in->y = 0;
+    roi_in->width = piece->buf_in.width;
+    roi_in->height = piece->buf_in.height;
+  }
 }
 
 void tiling_callback(dt_iop_module_t *self,
@@ -404,8 +404,7 @@ void tiling_callback(dt_iop_module_t *self,
   tiling->overlap = 0;
 
   dt_develop_blend_params_t *const bldata = piece->blendop_data;
-  if(bldata
-    && (piece->pipe->store_all_raster_masks || dt_iop_is_raster_mask_used(self, BLEND_RASTER_ID)))
+  if(bldata && dt_iop_piece_is_raster_mask_used(piece, BLEND_RASTER_ID))
   {
     tiling->factor += 0.5f;
     tiling->factor_cl += 0.5f;
@@ -458,6 +457,69 @@ void tiling_callback(dt_iop_module_t *self,
   }
 }
 
+static float *_provide_raster_mask(const dt_iop_roi_t *const roi_in,
+                                   const dt_iop_roi_t *const roi_out,
+                                   const float *in,
+                                   const float clip,
+                                   dt_dev_pixelpipe_iop_t *piece)
+{
+  const size_t opix = (size_t)roi_out->width * roi_out->height;
+  float *out = dt_alloc_align_float(opix);
+  float *tmp = dt_alloc_align_float(opix);
+  if(!out || !tmp)
+  {
+    dt_free_align(tmp);
+    dt_free_align(out);
+    return NULL;
+  }
+
+  const uint32_t filters = piece->pipe->dsc.filters;
+  const float clips[4] = { clip * piece->pipe->dsc.processed_maximum[0],
+                           clip * piece->pipe->dsc.processed_maximum[1],
+                           clip * piece->pipe->dsc.processed_maximum[2], clip };
+
+  if(filters == 0)  // sraw
+  {
+    DT_OMP_FOR()
+    for(int row = 0; row < roi_out->height; row++)
+    {
+      for(int col = 0; col < roi_out->width; col++)
+      {
+        const size_t ox = (size_t)row * roi_out->width + col;
+        const size_t ix = ox * 4;
+        float mval = 0.0f;
+        for(int c = 0; c < 3; c++)
+        {
+          const float ref = MAX(0.5, 0.95f * clips[c]);
+          mval = MAX(mval, (in[ix+c] - ref) / ref);
+        }
+        tmp[ox] = MAX(0.0f, mval);
+      }
+    }
+  }
+  else
+  {
+    const uint8_t(*const xtrans)[6] = (const uint8_t(*const)[6])piece->pipe->dsc.xtrans;
+    const gboolean is_xtrans = (filters == 9u);
+    DT_OMP_FOR()
+    for(int row = 0; row < roi_out->height; row++)
+    {
+      for(int col = 0; col < roi_out->width; col++)
+      {
+        const size_t ox = (size_t)row * roi_out->width + col;
+        const int irow = row + roi_out->y - roi_in->y;
+        const int icol = col + roi_out->x - roi_in->x;
+        const int c = is_xtrans ? FCxtrans(irow, icol, roi_in, xtrans) : FC(irow, icol, filters);
+        const float ref = MAX(0.5, 0.95f * clips[c]);
+        tmp[ox] = MAX(0.0f, (in[ox] - ref) / ref);
+      }
+    }
+  }
+  dt_gaussian_fast_blur(tmp, out, roi_out->width, roi_out->height, 1.0f, 0.0f, 1.0f, 1);
+  dt_free_align(tmp);
+  return out;
+}
+
 #ifdef HAVE_OPENCL
 int process_cl(dt_iop_module_t *self,
                dt_dev_pixelpipe_iop_t *piece,
@@ -474,6 +536,7 @@ int process_cl(dt_iop_module_t *self,
   const int devid = piece->pipe->devid;
 
   const gboolean fullpipe = piece->pipe->type & DT_DEV_PIXELPIPE_FULL;
+  gboolean announce = dt_iop_piece_is_raster_mask_used(piece, BLEND_RASTER_ID);
 
   cl_int err = DT_OPENCL_DEFAULT_ERROR;
   cl_mem dev_xtrans = NULL;
@@ -506,7 +569,7 @@ int process_cl(dt_iop_module_t *self,
           CLARG(roi_out->x), CLARG(roi_out->y),
           CLARG(filters), CLARG(dev_xtrans),
           CLARG(dev_clips));
-
+        announce = FALSE;
         goto finish;
       }
     }
@@ -594,6 +657,22 @@ int process_cl(dt_iop_module_t *self,
       CLARG(dev_clips), CLARG(roi_out->x), CLARG(roi_out->y),
       CLARG(filters), CLARG(dev_xtrans));
   }
+  if(err != CL_SUCCESS) goto finish;
+
+  float *mask = NULL;
+  if(announce)
+  {
+    const size_t ch = filters ? 1 : 4;
+    float *cpdata = dt_alloc_align_float(ch * roi_out->width * roi_out->height);
+    if(cpdata)
+    {
+      if(dt_opencl_copy_device_to_host(devid, cpdata, dev_out, roi_out->width, roi_out->height, ch * sizeof(float)) == CL_SUCCESS)
+        mask = _provide_raster_mask(roi_in, roi_out, cpdata, d->clip, piece);
+      dt_free_align(cpdata);
+    }
+  }
+  if(mask)  dt_iop_piece_set_raster(piece, mask, roi_in, roi_out);
+  else      dt_iop_piece_clear_raster(piece, NULL);
 
   // update processed maximum
   if((err == CL_SUCCESS) && (d->mode != DT_IOP_HIGHLIGHTS_LAPLACIAN) && (d->mode != DT_IOP_HIGHLIGHTS_OPPOSED))
@@ -605,6 +684,8 @@ int process_cl(dt_iop_module_t *self,
   }
 
   finish:
+  if(err != CL_SUCCESS) dt_iop_piece_clear_raster(piece, NULL);
+
   dt_opencl_release_mem_object(dev_clips);
   dt_opencl_release_mem_object(dev_xtrans);
   return err;
@@ -732,6 +813,20 @@ void process(dt_iop_module_t *self,
 
   const gboolean fullpipe = piece->pipe->type & DT_DEV_PIXELPIPE_FULL;
   const gboolean fastmode = piece->pipe->type & DT_DEV_PIXELPIPE_FAST;
+  const gboolean scaled = filters == 0 && d->mode != DT_IOP_HIGHLIGHTS_CLIP;
+
+  float *out = scaled ? dt_alloc_align_float((size_t)roi_in->width * roi_in->height * 4) : NULL;
+  const gboolean announce = dt_iop_piece_is_raster_mask_used(piece, BLEND_RASTER_ID);
+
+  if(!out && scaled)
+  {
+    dt_iop_clip_and_zoom_roi((float *)ovoid, (float *)ivoid, roi_out, roi_in);
+    dt_print_pipe(DT_DEBUG_ALWAYS,
+          "bypass highlights", piece->pipe, self, DT_DEVICE_CPU, roi_in, roi_out,
+          "can't allocate temp buffer");
+    dt_iop_piece_clear_raster(piece, NULL);
+    return;
+  }
 
   if(g && fullpipe)
   {
@@ -740,7 +835,16 @@ void process(dt_iop_module_t *self,
       piece->pipe->mask_display = DT_DEV_PIXELPIPE_DISPLAY_PASSTHRU;
       if(g->hlr_mask_mode == DT_HIGHLIGHTS_MASK_CLIPPED)
       {
-        process_visualize(piece, ivoid, ovoid, roi_in, roi_out, d);
+        if(scaled)
+        {
+          process_visualize(piece, ivoid, out, roi_in, roi_in, d);
+          dt_iop_clip_and_zoom_roi((float *)ovoid, out, roi_out, roi_in);
+          dt_free_align(out);
+        }
+        else
+          process_visualize(piece, ivoid, ovoid, roi_in, roi_out, d);
+
+        dt_iop_piece_clear_raster(piece, NULL);
         return;
       }
     }
@@ -769,8 +873,15 @@ void process(dt_iop_module_t *self,
     }
     else
     {
-      _process_linear_opposed(self, piece, ivoid, ovoid, roi_in, roi_out, high_quality);
+      _process_linear_opposed(self, piece, ivoid, out, roi_in, high_quality);
+      dt_iop_clip_and_zoom_roi((float *)ovoid, out, roi_out, roi_in);
+      dt_free_align(out);
     }
+
+    float *mask = announce ? _provide_raster_mask(roi_in, roi_out, (float *)ovoid, d->clip, piece) : NULL;
+    if(mask)  dt_iop_piece_set_raster(piece, mask, roi_in, roi_out);
+    else      dt_iop_piece_clear_raster(piece, NULL);
+
     return;
   }
 
@@ -863,6 +974,10 @@ void process(dt_iop_module_t *self,
       break;
     }
   }
+
+  float *mask = announce ? _provide_raster_mask(roi_in, roi_out, (float *)ovoid, d->clip, piece) : NULL;
+  if(mask)  dt_iop_piece_set_raster(piece, mask, roi_in, roi_out);
+  else      dt_iop_piece_clear_raster(piece, NULL);
 
   // update processed maximum
   if((d->mode != DT_IOP_HIGHLIGHTS_LAPLACIAN) && (d->mode != DT_IOP_HIGHLIGHTS_SEGMENTS) && (d->mode != DT_IOP_HIGHLIGHTS_OPPOSED))
@@ -1103,7 +1218,6 @@ void reload_defaults(dt_iop_module_t *self)
                                                                    DT_IOP_HIGHLIGHTS_OPPOSED);
       // As we only have clip available we remove all other options
       for(int i = 0; i < 6; i++) dt_bauhaus_combobox_remove_at(g->mode, 1);
-      d->mode = DT_IOP_HIGHLIGHTS_CLIP;
     }
     else if(sraw)
     {
@@ -1122,6 +1236,7 @@ void reload_defaults(dt_iop_module_t *self)
     _set_quads(g, NULL);
   }
   d->clip = MIN(d->clip, img->linear_response_limit);
+  d->mode = rawprep ? DT_IOP_HIGHLIGHTS_OPPOSED : DT_IOP_HIGHLIGHTS_CLIP;
 }
 
 static void _quad_callback(GtkWidget *quad, dt_iop_module_t *self)
